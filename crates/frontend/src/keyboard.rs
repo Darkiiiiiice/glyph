@@ -107,8 +107,17 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
             .as_ref()
             .map(|xs| u32::from(xs.key_get_one_sym(xkb::Keycode::new(key + EVDEV_TO_XKB))))
             .unwrap_or(0);
-        let reply = state.session.on_keysym(&state.engine, sym);
-        log::debug!("key {key} sym={sym:#x} consumed={} commit={:?}", reply.consumed, reply.commit);
+        // Ctrl/Alt/Super 按住时,字母键是快捷键而非拼音输入(xkb 对带修饰的
+        // 字母仍返回小写 keysym),必须转发给 compositor/应用。
+        // Shift 不用特判:shift+a 的 keysym 是大写 A,天然不进字母分支。
+        let shortcut =
+            state.xkb_state.as_ref().is_some_and(|xs| has_shortcut_modifier(xs));
+        let reply = if shortcut {
+            crate::session::Reply::default() // 不消费
+        } else {
+            state.session.on_keysym(&state.engine, sym)
+        };
+        log::debug!("key {key} sym={sym:#x} shortcut={shortcut} consumed={} commit={:?}", reply.consumed, reply.commit);
         state.consumed_keys.insert(key, reply.consumed);
         if let Some(text) = reply.commit {
             ime::send_commit(state, &text);
@@ -135,5 +144,53 @@ fn forward_key(state: &State, time: u32, key: u32, st: u32) {
     }
     if let Some(vkb) = &state.vkb {
         vkb.key(time, key, st);
+    }
+}
+
+/// Ctrl/Alt/Super 任一活动即视为快捷键(不消费,转发)。
+fn has_shortcut_modifier(xs: &xkb::State) -> bool {
+    [xkb::MOD_NAME_CTRL, xkb::MOD_NAME_ALT, xkb::MOD_NAME_LOGO]
+        .iter()
+        .any(|m| xs.mod_name_is_active(m, xkb::STATE_MODS_EFFECTIVE))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn us_state() -> xkb::State {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let km = xkb::Keymap::new_from_names(&ctx, "evdev", "pc105", "us", "", None, xkb::KEYMAP_COMPILE_NO_FLAGS)
+            .expect("本机应有 xkb 数据");
+        xkb::State::new(&km)
+    }
+
+    #[test]
+    fn plain_letter_is_not_shortcut() {
+        assert!(!has_shortcut_modifier(&us_state()));
+    }
+
+    #[test]
+    fn ctrl_down_is_shortcut() {
+        let mut xs = us_state();
+        // KEY_LEFTCTRL evdev=29 → xkb keycode 37
+        xs.update_key(xkb::Keycode::new(29 + EVDEV_TO_XKB), xkb::KeyDirection::Down);
+        assert!(has_shortcut_modifier(&xs));
+    }
+
+    #[test]
+    fn super_down_is_shortcut() {
+        let mut xs = us_state();
+        // KEY_LEFTMETA evdev=125 → xkb keycode 133
+        xs.update_key(xkb::Keycode::new(125 + EVDEV_TO_XKB), xkb::KeyDirection::Down);
+        assert!(has_shortcut_modifier(&xs));
+    }
+
+    #[test]
+    fn shift_alone_is_not_shortcut() {
+        let mut xs = us_state();
+        // KEY_LEFTSHIFT evdev=42 → xkb keycode 50
+        xs.update_key(xkb::Keycode::new(42 + EVDEV_TO_XKB), xkb::KeyDirection::Down);
+        assert!(!has_shortcut_modifier(&xs));
     }
 }
