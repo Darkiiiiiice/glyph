@@ -34,9 +34,17 @@
 音节表 + trie 词库 + DP 切分 + unigram 排序。
 **验收**：`echo "nihao" | glyph-cli` 输出 `1.你好 2.你号 3.泥蒿`。
 
-### M1 Wayland 最小前端
-im-v2 连 niri → 键盘 grab → preedit 发进应用 → virtual-keyboard-v1 上屏。
-**验收**：在 foot 终端里能打出一句完整中文。
+### M1 Wayland 最小前端 ✅(2026-08-22 完成)
+im-v2 连 niri → 键盘 grab → preedit 发进应用 → **im-v2 commit_string 上屏**(修正:上屏不需要 vkb,im-v2 自带 commit_string;vkb 的正确角色是"未消费按键转发回 compositor"的通道)。
+**验收**(alacritty 实测通过):真实键盘 `nihao`+数字 → `你好`,`woaini`+空格 → `我爱你`,`zhenhaochi` → `真好吃`,`chongqing` → `重庆`(多音字正确)。引擎候选渲染、数字/空格选词、Ctrl/Super 转发均验证。
+
+**M1 关键发现(踩坑记录)**:
+- im-v2/vkb 协议绑定不在 wayland-protocols crate 里,需 vendor XML + wayland-scanner 生成(im-v2 XML 来自 wlroots 仓库);text-input-v3 用 crate 现成的 `wp::text_input::zv3`。
+- **fcitx5 独占冲突**:niri 的 im-v2 activate 只发给一个 input-method 对象;fcitx5 在跑时 glyph 收不到 activate。测试/使用 glyph 前须停 fcitx5。
+- **smithay 收 vkb keymap 只认 memfd 型 fd**:普通临时文件静默失败(后续 key/modifiers 报 no_keymap 协议错误);正确做法是把 compositor 给的 keymap fd `try_clone` 直转,零复制零损坏面。
+- **niri/smithay 下发的 keymap fd 文件偏移在末尾**:顺序读得 0 字节,必须 mmap(new_from_fd)或 read_at。
+- vkb 注入的键被 smithay 发给焦点应用的 wl_keyboard、**绕过 im grab**——vkb 注入器(glyph-type)测不了 IME 路径,已删除;真实键盘才走 grab。
+- grab 期间 compositor 不再处理键盘,IME 必须把未消费键经 vkb 转发回去,否则 niri 全局快捷键全灭。
 
 ### M1.5 动态调频 + 用户词库
 激进动态调频：每次选择权重 +1，选 3 次上浮，词频持久化落盘；用户词记忆。

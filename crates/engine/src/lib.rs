@@ -25,6 +25,11 @@ impl Engine {
         Ok(Self { lexicon: dict::Lexicon::load(path)? })
     }
 
+    /// 从内存中的行格式文本构建（测试与用户词库注入用）。
+    pub fn from_str(lines: &str) -> Self {
+        Self { lexicon: dict::Lexicon::from_lines(lines) }
+    }
+
     /// 转换整串拼音，返回按 unigram 概率降序的候选，最多 `limit` 条。
     /// 输入中的 `'` 是强制音节边界（如 `xi'an`）。
     pub fn convert(&self, input: &str, limit: usize) -> Vec<Candidate> {

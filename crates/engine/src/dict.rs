@@ -107,8 +107,8 @@ impl Lexicon {
         sort_node(&mut self.root);
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_lines(lines: &str) -> Self {
+    /// 从行格式文本构建(测试与 Engine::from_str 用)。
+    pub fn from_lines(lines: &str) -> Self {
         let mut lex = Self::empty();
         for line in lines.lines().filter(|l| !l.is_empty()) {
             lex.insert_line(line).unwrap();
