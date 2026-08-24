@@ -193,3 +193,16 @@ fn shift_chord_is_not_click() {
     assert!(!s.on_release(K::KEY_Shift_L), "Shift+字母不是单击,不应切换");
     assert!(!s.english);
 }
+#[test]
+fn shift_click_while_composing_clears_buffer() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    s.on_keysym(&e, 'n' as u32);
+    s.on_keysym(&e, 'i' as u32); // 组字中
+    assert!(s.composing());
+    // 组字中单击 Shift:切英文 + 丢弃拼音缓冲(drop,不上屏拼音原文)
+    s.on_keysym(&e, K::KEY_Shift_L);
+    assert!(s.on_release(K::KEY_Shift_L));
+    assert!(s.english && !s.composing(), "切入英文应清空拼音缓冲,候选窗随之隐藏");
+}
