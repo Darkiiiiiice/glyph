@@ -67,7 +67,7 @@ pub fn redraw(state: &mut State, qh: &QueueHandle<State>) {
         state.renderer = crate::render::Renderer::load();
     }
     let pinyin = state.session.buffer.clone();
-    let cands: Vec<String> = state.session.candidates.iter().map(|c| c.text.clone()).collect();
+    let cands: Vec<String> = state.session.page_candidates().iter().map(|c| c.text.clone()).collect();
     if pinyin.is_empty() && cands.is_empty() {
         hide(state);
         return;

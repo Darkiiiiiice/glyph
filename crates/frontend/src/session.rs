@@ -16,16 +16,20 @@ pub struct Reply {
 
 /// 一页候选数(数字键 1-9 直选)。
 const PAGE: usize = 9;
+/// 候选池大小(convert 的 limit):翻页的数据源,支持 POOL/PAGE 页。
+const POOL: usize = 90;
 
 pub struct Session {
     /// 当前拼音字母串,如 "nihao";空串 = 未在组字。
     pub buffer: String,
     pub candidates: Vec<Candidate>,
+    /// 当前页码(0-based),输入变化/上屏时重置。
+    page: usize,
 }
 
 impl Session {
     pub fn new() -> Self {
-        Self { buffer: String::new(), candidates: Vec::new() }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0 }
     }
 
     pub fn composing(&self) -> bool {
@@ -43,7 +47,7 @@ impl Session {
             }
             K::KEY_1..=K::KEY_9 if self.composing() => {
                 let idx = (sym - K::KEY_1) as usize;
-                match self.candidates.get(idx) {
+                match self.candidates.get(self.page * PAGE + idx) {
                     Some(c) => {
                         let text = c.text.clone();
                         self.clear();
@@ -52,7 +56,7 @@ impl Session {
                     None => Reply { consumed: true, ..Default::default() },
                 }
             }
-            K::KEY_space if self.composing() => match self.candidates.first() {
+            K::KEY_space if self.composing() => match self.candidates.get(self.page * PAGE) {
                 Some(c) => {
                     let text = c.text.clone();
                     self.clear();
@@ -68,6 +72,16 @@ impl Session {
             K::KEY_BackSpace if self.composing() => {
                 self.buffer.pop();
                 self.refresh(engine);
+                Reply { consumed: true, preedit_dirty: true, ..Default::default() }
+            }
+            // 翻页:`-` 上一页、`=` 下一页(避开 `,` `.`,留给中文标点)。
+            // 拼音不变,仅 preedit_dirty 触发候选窗重绘当前页。
+            K::KEY_minus if self.composing() && self.page > 0 => {
+                self.page -= 1;
+                Reply { consumed: true, preedit_dirty: true, ..Default::default() }
+            }
+            K::KEY_equal if self.composing() && (self.page + 1) * PAGE < self.candidates.len() => {
+                self.page += 1;
                 Reply { consumed: true, preedit_dirty: true, ..Default::default() }
             }
             K::KEY_Return if self.composing() => {
@@ -99,12 +113,19 @@ impl Session {
 
     fn refresh(&mut self, engine: &Engine) {
         self.candidates =
-            if self.buffer.is_empty() { Vec::new() } else { engine.convert(&self.buffer, PAGE) };
+            if self.buffer.is_empty() { Vec::new() } else { engine.convert(&self.buffer, POOL) };
+        self.page = 0;
     }
 
     fn clear(&mut self) {
         self.buffer.clear();
         self.candidates.clear();
+        self.page = 0;
+    }
+    /// 当前页候选(候选窗渲染的数据源)。
+    pub fn page_candidates(&self) -> &[Candidate] {
+        let start = (self.page * PAGE).min(self.candidates.len());
+        &self.candidates[start..(start + PAGE).min(self.candidates.len())]
     }
 }
 
@@ -171,5 +192,51 @@ mod tests {
         let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_F1);
         assert!(!r.consumed && r.commit.is_none());
         assert!(!s.composing());
+    }
+    /// 构造 12 个同音节候选的引擎,用于翻页测试(词频递减 → 排序 w1..w12)。
+    fn paged_fixture() -> Engine {
+        let mut lex = String::new();
+        for i in 1..=12 {
+            lex.push_str(&format!("a w{} {}\n", i, 100 - i));
+        }
+        Engine::from_str(&lex)
+    }
+
+    #[test]
+    fn paging_via_minus_equal() {
+        use xkbcommon::xkb::keysyms as K;
+        let e = paged_fixture();
+        let mut s = Session::new();
+        s.on_keysym(&e, 'a' as u32);
+        assert_eq!(s.candidates.len(), 12, "候选池应取满 12 个(非 9)");
+        assert_eq!(s.page_candidates().len(), 9);
+        assert_eq!(s.page_candidates()[0].text, "w1");
+        // 下一页:`=`
+        let r = s.on_keysym(&e, K::KEY_equal);
+        assert!(r.consumed && r.preedit_dirty);
+        assert_eq!(s.page_candidates().len(), 3, "末页剩 3 个");
+        assert_eq!(s.page_candidates()[0].text, "w10");
+        // 数字选词选当前页页内第 k 个
+        let r = s.on_keysym(&e, K::KEY_1);
+        assert_eq!(r.commit.as_deref(), Some("w10"));
+    }
+
+    #[test]
+    fn page_boundaries_and_reset() {
+        use xkbcommon::xkb::keysyms as K;
+        let e = paged_fixture();
+        let mut s = Session::new();
+        s.on_keysym(&e, 'a' as u32);
+        s.on_keysym(&e, K::KEY_equal);
+        assert_eq!(s.page, 1);
+        // 末页再按 `=` 越界:落入丢弃分支(键转发)
+        let r = s.on_keysym(&e, K::KEY_equal);
+        assert!(!r.consumed && !s.composing());
+        // 重新输入后页码重置
+        s.on_keysym(&e, 'a' as u32);
+        assert_eq!(s.page, 0);
+        // 第 0 页按 `-` 不能上翻:丢弃拼音、键转发
+        let r = s.on_keysym(&e, K::KEY_minus);
+        assert!(!r.consumed && !s.composing());
     }
 }

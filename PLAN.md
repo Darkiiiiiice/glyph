@@ -46,14 +46,18 @@ im-v2 连 niri → 键盘 grab → preedit 发进应用 → **im-v2 commit_strin
 - vkb 注入的键被 smithay 发给焦点应用的 wl_keyboard、**绕过 im grab**——vkb 注入器(glyph-type)测不了 IME 路径,已删除;真实键盘才走 grab。
 - grab 期间 compositor 不再处理键盘,IME 必须把未消费键经 vkb 转发回去,否则 niri 全局快捷键全灭。
 
-### M1.5 动态调频 + 用户词库
-激进动态调频：每次选择权重 +1，选 3 次上浮，词频持久化落盘；用户词记忆。
-**提前理由**：这是核心痛点（"常打的词沉底"），且调频改动排序层，必须在候选窗（M2）之前落地避免返工。
-**验收**：常打的词 3 次选择后上浮到候选顶部；重启后词频保留。
+### M1.5 动态调频 + 用户词库 ✅(2026-08-24 完成)
+实现:引擎 convert 叠加 `USER_W·ln(1+count)` 用户词频增量(USER_W=6,选 3 次 ≈ +8.3 对数分);`Engine::learn` 累计整词选词次数,落盘 `~/.local/share/glyph/user_freq.txt`(XDG),启动加载。segment::convert 内 DP 后、take 前叠加增量重排。
 
-### M2 候选窗
-layer-shell + fontdue 渲染 + 光标跟随 + 数字选词/翻页。
-**验收**：候选窗跟随光标、数字选词、翻页可用。
+### M2 候选窗 ✅(2026-08-24 完成)
+实现修正:用 `zwp_input_popup_surface_v2` 而非 layer-shell——compositor 自动把候选窗定位到文本光标(收 `text_input_rectangle` 事件),无需手算坐标。fontdue 光栅化 CJK(Noto Sans CJK)竖排候选列表+首候选高亮;shm buffer 经 memfd 承载(smithay mmap 只认 memfd 型 fd,M1 keymap 同款坑);rustix 纯 syscall 零 C 链接。activate 建 surface、打字重绘、上屏/deactivate 隐藏;preedit 只显拼音(候选交给候选窗,消除双候选框)。
+翻页:`-`/`=` 前后翻页(避开 `,` `.` 留给中文标点),候选池 90(10 页),数字/空格选当前页页内第 k 个;输入变化/上屏重置页码。
+
+**M2 关键发现(踩坑记录)**:
+- **shm buffer 必须 memfd 型 fd**:smithay 的 mmap 路径只认 memfd——普通临时文件(/tmp,即使 tmpfs)在 `wl_shm.create_pool` 后报 `Failed to mmap fd N` 协议错误直接断连。与 M1 vkb keymap 同一个坑。解法:`rustix::fs::memfd_create`(纯 syscall linux_raw,零 C 链接),`File::from(OwnedFd)` 后 set_len+write 像素。
+- **fcitx5 独占 im-v2 activate(M1 已记,M2 再踩)**:候选窗"完全不显示"的表象,根因常是 fcitx5 在后台独占了 activate——glyph 连键盘焦点都收不到。排查候选窗问题第一步先确认 fcitx5 已停。
+- **`text_input_rectangle`(光标矩形)事件在 surface attach buffer 并 commit 后才由 compositor 发来**;popup surface 一创建就有,但光标定位要等首个 commit 后才生效。
+- **双候选框**:M2 候选窗落地后 preedit 若仍内联候选列表,会出现横向 preedit 候选(应用渲染)+竖向候选窗(popup)两套并存。preedit 只显拼音,候选交给候选窗。
 
 ### M3 体验完善
 简拼 + 中文标点 + 配置文件。
