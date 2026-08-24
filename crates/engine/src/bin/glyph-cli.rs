@@ -12,6 +12,7 @@ use glyph_engine::Engine;
 fn main() -> ExitCode {
     let mut lexicon = env::var("GLYPH_LEXICON").unwrap_or_else(|_| "data/lexicon.txt".to_string());
     let mut char_mode = false;
+    let mut ctx: Option<String> = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -20,11 +21,15 @@ fn main() -> ExitCode {
                 None => return usage(),
             },
             "--chars" => char_mode = true, // Tab 单字模式:第一音节单字候选
+            "--ctx" => match args.next() {
+                Some(w) => ctx = Some(w), // 上文(bigram):候选首词与其有搭配记录时上浮
+                None => return usage(),
+            },
             _ => return usage(),
         }
     }
 
-    let engine = match Engine::load(Path::new(&lexicon)) {
+    let mut engine = match Engine::load(Path::new(&lexicon)) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("加载词库失败 {lexicon}: {err}");
@@ -32,6 +37,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // 加载用户 bigram(XDG 路径,与 glyph 同),供 --ctx 上文排序
+    if let Some(bp) = bigram_path() {
+        if let Ok(map) = Engine::load_bigram(&bp) {
+            if !map.is_empty() {
+                engine.set_user_bigram(map);
+            }
+        }
+    }
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -45,7 +58,7 @@ fn main() -> ExitCode {
         if input.is_empty() {
             continue;
         }
-        let cands = if char_mode { engine.first_syllable_chars(&input, 9) } else { engine.convert(&input, 9) };
+        let cands = if char_mode { engine.first_syllable_chars(&input, 9) } else { engine.convert_ctx(&input, 9, ctx.as_deref()) };
         if cands.is_empty() {
             writeln!(out, "{input} -> (无候选)").ok();
             continue;
@@ -63,6 +76,14 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-            eprintln!("用法: glyph-cli [--lexicon <路径>] [--chars] < 拼音串");
+    eprintln!("用法: glyph-cli [--lexicon <路径>] [--chars] [--ctx <上文>] < 拼音串");
     ExitCode::FAILURE
+}
+
+/// 用户 bigram 路径:XDG_DATA_HOME(或 ~/.local/share)/glyph/user_bigram.txt(与 glyph 同)。
+fn bigram_path() -> Option<std::path::PathBuf> {
+    let data_home = env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))?;
+    Some(data_home.join("glyph/user_bigram.txt"))
 }
