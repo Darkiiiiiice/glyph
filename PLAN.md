@@ -70,8 +70,8 @@ im-v2 连 niri → 键盘 grab → preedit 发进应用 → **im-v2 commit_strin
 - 修复:部分上屏时候选窗不消失(keyboard commit 分支检查仍在组字则重发剩余拼音 preedit + 重绘候选窗)。
 
 ### 增强：bigram 上下文排序
-unigram 只看词频不看上文，解决不了"打'我们'后'学习'应提前"。M3 之后的首个增强（需语料或输入历史数据支撑）。
-**验收**：输入"我们"后"学习"等高频搭配提前。
+**✅ 冷启动 bigram 2026-08-24 完成**(commit `4b44e06`)。无外部语料(rime-essay 是 LGPL-3.0,不符本项目 MIT-only 数据约束),搭配从用户输入历史积累:`user_bigram`(上文尾词→{当前词→次数});`convert_ctx` 重排叠加 `BIGRAM_W·ln(1+搭配次数)`(BIGRAM_W=6,与 USER_W 同量纲);Session 记 `prev_word`,pick 时 `learn_bigram`(上文尾词→本次首词)并更新上文;落盘 `user_bigram.txt`(与 user_freq 同目录,随 commit 写)。单测覆盖 engine 上浮+持久化、session prev_word 传递。
+**验收**:反复"我们→学习"后,打"我们"再打 xuexi,"学习"提前(随使用积累生效)。
 
 ### M4 毕业项目
 niri 侧协议修复 + 上游 PR。输入法 + 合成器两端全掌握，是本项目独有的学习场景。
