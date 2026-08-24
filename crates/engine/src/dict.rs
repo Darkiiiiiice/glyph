@@ -25,6 +25,9 @@ pub struct Lexicon {
     pub total_freq: u64,
     /// 用户词频:整句候选 text → 被选择次数。动态调频层,不混入 trie/total_freq。
     pub user_freq: HashMap<String, u32>,
+    /// 简拼索引:多字词各字声母连成的 key(你好→nh、中国→zhg) → [(词, 词频)],
+    /// finish 时按词频降序。简拼是精确声母匹配,不参与音节格 DP。
+    pub jianpin: HashMap<String, Vec<(String, u32)>>,
 }
 
 impl Lexicon {
@@ -78,7 +81,7 @@ impl Lexicon {
     }
 
     fn empty() -> Self {
-        Self { root: Node::default(), syllables: HashSet::new(), total_freq: 0, user_freq: HashMap::new() }
+        Self { root: Node::default(), syllables: HashSet::new(), total_freq: 0, user_freq: HashMap::new(), jianpin: HashMap::new() }
     }
 
     fn insert_line(&mut self, line: &str) -> Result<(), String> {
@@ -98,6 +101,11 @@ impl Lexicon {
         }
         node.words.push((word.to_string(), freq));
         self.total_freq += u64::from(freq);
+        // 多字词建简拼索引:各音节声母连成 key。
+        if sylls.len() >= 2 {
+            let key: String = sylls.iter().map(|s| shengmu(s)).collect();
+            self.jianpin.entry(key).or_default().push((word.to_string(), freq));
+        }
         Ok(())
     }
 
@@ -107,6 +115,9 @@ impl Lexicon {
             node.children.values_mut().for_each(sort_node);
         }
         sort_node(&mut self.root);
+        for v in self.jianpin.values_mut() {
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+        }
     }
 
     /// 从行格式文本构建(测试与 Engine::from_str 用)。
@@ -119,6 +130,12 @@ impl Lexicon {
         lex
     }
 }
+/// 音节的声母(简拼 key 用):zh/ch/sh 为双字母整体,其余取首字母
+/// (零声母音节 a/o/e 开头取首字母,如 an→a、ou→o)。
+fn shengmu(syll: &str) -> &str {
+    let b = syll.as_bytes();
+    if b.len() >= 2 && matches!(&b[..2], b"zh" | b"ch" | b"sh") { &syll[..2] } else { &syll[..1] }
+}
 
 #[cfg(test)]
 mod tests {
@@ -129,5 +146,16 @@ mod tests {
         let lex = Lexicon::from_lines("ni'hao 你好 10000\nni 你 500\nhao 好 300\n");
         assert!(lex.syllables.contains("ni") && lex.syllables.contains("hao"));
         assert_eq!(lex.total_freq, 10800);
+    }
+    #[test]
+    fn builds_jianpin_index() {
+        let lex = Lexicon::from_lines(
+            "ni'hao 你好 10000\nzhong'guo 中国 8000\nni 你 500\n",
+        );
+        // 多字词建简拼;zh 是双字母声母整体
+        assert!(lex.jianpin["nh"].iter().any(|(w, _)| w == "你好"));
+        assert!(lex.jianpin["zhg"].iter().any(|(w, _)| w == "中国"));
+        // 单字不进简拼索引
+        assert!(!lex.jianpin.values().flatten().any(|(w, _)| w == "你"));
     }
 }

@@ -62,22 +62,35 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
         dp[end] = merged;
     }
 
-    let mut seen = HashSet::new();
-    let cands: Vec<Candidate> = dp[len]
+    // DP 全拼候选(先不去重,留待与简拼统一处理)。
+    let mut cands: Vec<Candidate> = dp[len]
         .iter()
         .map(|(score, words)| Candidate {
             text: words.concat(),
             words: words.iter().map(|w| w.to_string()).collect(),
             score: *score,
         })
-        .filter(|c| seen.insert(c.text.clone()))
         .collect();
 
-    // 用户动态调频:被选过的词加 ln(1+count)·W 权重后重排再截断。
-    // score 字段保持原始对数概率(语义未被污染),只影响候选次序。
-    if lex.user_freq.is_empty() {
-        return cands.into_iter().take(limit).collect();
+    // 简拼候选:输入(音节格已去 ')作为声母 key 精确匹配。score 用同一
+    // unigram 对数量纲 ln(freq/total),与全拼候选公平竞争。
+    if let Some(jp) = lex.jianpin.get(&lattice.text) {
+        for (word, freq) in jp {
+            cands.push(Candidate {
+                text: word.clone(),
+                words: vec![word.clone()],
+                score: (*freq as f64 / total).ln(),
+            });
+        }
     }
+
+    // 统一去重:保留先出现者(DP 全拼在前,优先于同文本的简拼)。
+    let mut seen = HashSet::new();
+    cands.retain(|c| seen.insert(c.text.clone()));
+
+    // 统一排序:静态 score + 用户调频增量(无用户数据时增量 ln(1)=0,即纯静态
+    // 序)。简拼与全拼一起排序,高分简拼不会被 take 截断。score 字段保持原始
+    // 对数概率不被污染,只影响次序。
     let mut ranked: Vec<(f64, Candidate)> = cands
         .into_iter()
         .map(|c| {
@@ -154,5 +167,16 @@ mod tests {
         lex.user_freq.insert("泥蒿".to_string(), 1);
         let cands = convert(&lex, "nihao", 9);
         assert_eq!(cands[0].text, "你好");
+    }
+    #[test]
+    fn jianpin_matches_shengmu_key() {
+        let lex = Lexicon::from_lines("ni'hao 你好 10000\nni 你 500\nhao 好 300\n");
+        // "nh" 不是合法音节序列(全拼 DP 无候选),简拼索引精确命中 你好
+        let cands = convert(&lex, "nh", 9);
+        assert_eq!(cands.first().map(|c| c.text.as_str()), Some("你好"));
+        // 全拼路径不受影响
+        assert_eq!(convert(&lex, "nihao", 9)[0].text, "你好");
+        // 无声母 key 的输入仍为空
+        assert!(convert(&lex, "zzz", 9).is_empty());
     }
 }
