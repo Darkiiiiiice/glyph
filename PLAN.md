@@ -59,9 +59,10 @@ im-v2 连 niri → 键盘 grab → preedit 发进应用 → **im-v2 commit_strin
 - **`text_input_rectangle`(光标矩形)事件在 surface attach buffer 并 commit 后才由 compositor 发来**;popup surface 一创建就有,但光标定位要等首个 commit 后才生效。
 - **双候选框**:M2 候选窗落地后 preedit 若仍内联候选列表,会出现横向 preedit 候选(应用渲染)+竖向候选窗(popup)两套并存。preedit 只显拼音,候选交给候选窗。
 
-### M3 体验完善
-简拼 + 中文标点 + 配置文件。
-**验收**：简拼可用；中文标点符合习惯。
+### M3 体验完善 ✅(2026-08-24 完成)
+- **简拼**:多字词声母 key 精确匹配(你好→nh、中国→zhg),dict 预生成索引,convert 与全拼 DP 候选统一去重+排序(同 unigram 对数量纲)。纯声母简拼(不含混合拼);歧义靠动态调频补偿。实测 zhg→中国、bj→北京 首位。
+- **中文标点**:`,。;:!?()、<>` 全角映射(顿号用反斜杠),组字中=上屏当前页首选+标点、空闲=直接上屏标点;`Ctrl+.` 切换中/英(打代码)。翻页 `-`/`=` 与标点 `,`/`.` 无冲突。
+- **配置文件**:`~/.config/glyph/config.conf`(key=value 手写解析,零依赖),font_size/配色(bg/fg/pinyin_fg/hilite_bg)/punct_cn 默认;默认值=原硬编码,缺文件/坏行静默回退。
 
 ### 增强：bigram 上下文排序
 unigram 只看词频不看上文，解决不了"打'我们'后'学习'应提前"。M3 之后的首个增强（需语料或输入历史数据支撑）。
