@@ -27,7 +27,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
     ) {
         match event {
             Event::Keymap { format, fd, size } => on_keymap(state, format, fd, size),
-            Event::Key { time, key, state: st, .. } => on_key(state, time, key, st),
+            Event::Key { time, key, state: st, .. } => on_key(state, time, key, st, qh),
             Event::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
                 log::debug!("grab modifiers: d={mods_depressed} l={mods_latched} g={group} vkb_ready={}", state.vkb_ready);
                 if let Some(xs) = &mut state.xkb_state {
@@ -95,7 +95,7 @@ fn on_keymap(state: &mut State, format: WEnum<wl_keyboard::KeymapFormat>, fd: st
     }
 }
 
-fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyState>) {
+fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyState>, qh: &wayland_client::QueueHandle<State>) {
     let pressed = st == WEnum::Value(wl_keyboard::KeyState::Pressed);
     let st_raw = match st {
         WEnum::Value(v) => v as u32,
@@ -129,9 +129,11 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
                 log::warn!("用户词频落盘失败: {e}");
             }
             ime::send_commit(state, &text);
+            crate::popup::hide(state); // 上屏后隐藏候选窗
         } else if reply.preedit_dirty {
             let preedit = state.session.render_preedit();
             ime::send_preedit(state, &preedit);
+            crate::popup::redraw(state, qh); // 候选变化,重绘候选窗
         }
         if !reply.consumed {
             forward_key(state, time, key, st_raw);

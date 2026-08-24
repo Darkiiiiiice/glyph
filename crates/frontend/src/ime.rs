@@ -28,15 +28,18 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
                 }
                 // 建立 vkb 转发通道(幂等)
                 crate::keyboard::ensure_vkb(state, qh);
+                // 建立候选窗 popup surface(幂等,M2)
+                crate::popup::ensure_popup(state, qh);
             }
             Event::Deactivate => {
                 log::info!("im-v2 deactivate");
                 state.ime_active = false;
-                // 放弃进行中的组字,清 preedit
+                // 放弃进行中的组字,清 preedit 与候选窗
                 if state.session.composing() {
                     state.session = crate::session::Session::new();
                     send_preedit(state, "");
                 }
+                crate::popup::hide(state);
                 if let Some(grab) = state.grab.take() {
                     grab.release();
                 }

@@ -9,6 +9,8 @@
 mod globals;
 mod ime;
 mod keyboard;
+mod popup;
+mod render;
 mod session;
 
 use std::path::PathBuf;
@@ -65,6 +67,8 @@ fn main() -> ExitCode {
         ("zwp_input_method_manager_v2", state.im_manager.is_some()),
         ("zwp_virtual_keyboard_manager_v1", state.vkb_manager.is_some()),
         ("wl_seat", state.seat.is_some()),
+        ("wl_compositor", state.compositor.is_some()),
+        ("wl_shm", state.shm.is_some()),
     ] {
         if !present {
             eprintln!("glyph: compositor 未公告 {name}");

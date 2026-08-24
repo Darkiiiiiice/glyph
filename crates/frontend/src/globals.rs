@@ -1,8 +1,10 @@
 //! 应用状态与 Wayland registry 全局发现。
 //! 所有协议对象的事件都汇总到 [`State`],各模块分别实现对应 Dispatch。
 
+use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_registry;
 use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
 use xkbcommon::xkb;
 
@@ -22,6 +24,15 @@ pub struct State {
     pub vkb_manager: Option<ZwpVirtualKeyboardManagerV1>,
     pub ti_v3_seen: bool,
     pub seat: Option<WlSeat>,
+    pub compositor: Option<WlCompositor>,
+    pub shm: Option<WlShm>,
+    // --- 候选窗(M2):popup surface + 光标矩形 ---
+    pub popup_surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    pub popup: Option<glyph_frontend::protocol::input_method_v2::client::zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2>,
+    /// compositor 报告的文本光标矩形(相对焦点 surface)。
+    pub cursor_rect: Option<(i32, i32, i32, i32)>,
+    /// 候选窗渲染器(M2,lazy 加载 CJK 字体)。
+    pub renderer: Option<crate::render::Renderer>,
     // --- im-v2 会话 ---
     pub ime: Option<ZwpInputMethodV2>,
     pub ime_active: bool,
@@ -53,6 +64,12 @@ impl State {
             vkb_manager: None,
             ti_v3_seen: false,
             seat: None,
+            compositor: None,
+            shm: None,
+            popup_surface: None,
+            popup: None,
+            cursor_rect: None,
+            renderer: None,
             ime: None,
             ime_active: false,
             done_count: 0,
@@ -107,22 +124,45 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "wl_seat" if state.seat.is_none() => {
                     state.seat = Some(registry.bind::<WlSeat, _, _>(name, version.min(7), qh, ()));
                 }
+                "wl_compositor" => {
+                    state.compositor =
+                        Some(registry.bind::<WlCompositor, _, _>(name, version.min(5), qh, ()));
+                    log::info!("bound wl_compositor");
+                }
+                "wl_shm" => {
+                    state.shm = Some(registry.bind::<WlShm, _, _>(name, version.min(1), qh, ()));
+                    log::info!("bound wl_shm");
+                }
                 _ => {}
             }
         }
     }
 }
 
-// 管理器与 vkb 无事件,可 noop;WlSeat 有 capabilities/name 事件,必须手写忽略。
+// 管理器、vkb、compositor 无事件,可 noop;WlSeat 与 WlShm 有事件,必须手写忽略。
 wayland_client::delegate_noop!(State: ZwpInputMethodManagerV2);
 wayland_client::delegate_noop!(State: ZwpVirtualKeyboardManagerV1);
 wayland_client::delegate_noop!(State: ZwpVirtualKeyboardV1);
+wayland_client::delegate_noop!(State: WlCompositor);
 
 impl Dispatch<WlSeat, ()> for State {
     fn event(
         _: &mut Self,
         _: &WlSeat,
         _: <WlSeat as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// wl_shm 绑定后立即收到一批 format 事件(公告支持的像素格式),忽略即可。
+impl Dispatch<WlShm, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &WlShm,
+        _: <WlShm as wayland_client::Proxy>::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
