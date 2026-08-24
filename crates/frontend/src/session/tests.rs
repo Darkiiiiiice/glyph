@@ -151,3 +151,15 @@ fn quote_pairs_alternate() {
     assert_eq!(s.on_keysym(&e, K::KEY_apostrophe).commit.as_deref(), Some("\u{2018}"));
     assert_eq!(s.on_keysym(&e, K::KEY_apostrophe).commit.as_deref(), Some("\u{2019}"));
 }
+#[test]
+fn modifier_keys_do_not_disturb_composing() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    s.on_keysym(&e, 'n' as u32);
+    s.on_keysym(&e, 'i' as u32);
+    // 组字中按 Shift(欲打引号的 Shift+'):不上屏、不丢拼音,键转发
+    let r = s.on_keysym(&e, K::KEY_Shift_L);
+    assert!(!r.consumed && r.commit.is_none());
+    assert!(s.composing() && s.buffer == "ni", "Shift 不应打断组字: buffer={}", s.buffer);
+}

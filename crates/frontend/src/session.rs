@@ -108,6 +108,9 @@ impl Session {
                 let p = self.punct_of(sym).unwrap();
                 self.commit_punct(p)
             }
+            // 修饰键本身(Shift/Ctrl/Alt/Super 的 press):只改修饰状态,不影响组字、
+            // 不上屏,直接转发。否则组字中按 Shift 欲打引号,会误触发下方的"上屏拼音原文"。
+            s if is_modifier(s) => Reply::default(),
             // 其余键:组字中先上屏拼音原文(不丢已敲字母),键本身转发给应用。
             _ => {
                 if self.composing() {
@@ -201,6 +204,12 @@ fn is_punct_key(sym: u32) -> bool {
     cn_punct(sym).is_some()
         || sym == xkbcommon::xkb::keysyms::KEY_quotedbl
         || sym == xkbcommon::xkb::keysyms::KEY_apostrophe
+}
+/// 是否修饰键的 press keysym(Shift/Ctrl/Alt/Super/Caps/Meta/Hyper 的 L/R,0xffe1-0xffee 段)。
+/// 修饰键只改修饰状态,不应触发上屏或打断组字。
+fn is_modifier(sym: u32) -> bool {
+    use xkbcommon::xkb::keysyms as K;
+    (K::KEY_Shift_L..=K::KEY_Hyper_R).contains(&sym)
 }
 
 #[cfg(test)]

@@ -133,6 +133,9 @@ impl Lexicon {
 /// 音节的声母(简拼 key 用):zh/ch/sh 为双字母整体,其余取首字母
 /// (零声母音节 a/o/e 开头取首字母,如 an→a、ou→o)。
 fn shengmu(syll: &str) -> &str {
+    if syll.is_empty() {
+        return ""; // 保险:insert_line 已拒空音节(拼音含空音节→Err),此处仅防御
+    }
     let b = syll.as_bytes();
     if b.len() >= 2 && matches!(&b[..2], b"zh" | b"ch" | b"sh") { &syll[..2] } else { &syll[..1] }
 }
