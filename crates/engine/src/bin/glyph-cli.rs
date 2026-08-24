@@ -11,6 +11,7 @@ use glyph_engine::Engine;
 
 fn main() -> ExitCode {
     let mut lexicon = env::var("GLYPH_LEXICON").unwrap_or_else(|_| "data/lexicon.txt".to_string());
+    let mut char_mode = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -18,6 +19,7 @@ fn main() -> ExitCode {
                 Some(p) => lexicon = p,
                 None => return usage(),
             },
+            "--chars" => char_mode = true, // Tab 单字模式:第一音节单字候选
             _ => return usage(),
         }
     }
@@ -43,7 +45,7 @@ fn main() -> ExitCode {
         if input.is_empty() {
             continue;
         }
-        let cands = engine.convert(&input, 9);
+        let cands = if char_mode { engine.first_syllable_chars(&input, 9) } else { engine.convert(&input, 9) };
         if cands.is_empty() {
             writeln!(out, "{input} -> (无候选)").ok();
             continue;
@@ -61,6 +63,6 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("用法: glyph-cli [--lexicon <路径>] < 拼音串");
+            eprintln!("用法: glyph-cli [--lexicon <路径>] [--chars] < 拼音串");
     ExitCode::FAILURE
 }

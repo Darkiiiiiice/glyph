@@ -140,7 +140,9 @@ pub fn first_syllable_chars(lex: &Lexicon, input: &str, limit: usize) -> Vec<Can
             (c.score + (1.0 + boost as f64).ln() * USER_W, c)
         })
         .collect();
-    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    // 长音节(consumed 大)的字优先:打 xuan 定 xuan 的字,短切分 xu 的高频字(需/须)靠后;
+    // 同一切分内按得分(静态词频+用户调频)。
+    ranked.sort_by(|a, b| b.1.consumed.cmp(&a.1.consumed).then_with(|| b.0.total_cmp(&a.0)));
     ranked.into_iter().take(limit).map(|(_, c)| c).collect()
 }
 
@@ -215,6 +217,15 @@ mod tests {
         lex.user_freq.insert("宣".to_string(), 3);
         let cands = first_syllable_chars(&lex, "xuanze", 90);
         assert_eq!(cands[0].text, "宣", "选过 3 次的低频字应上浮: {cands:?}");
+    }
+
+    #[test]
+    fn first_syllable_chars_prefers_longest_syllable() {
+        // 短切分 xu 的高频字(需)也排在长音节 xuan 的字(选)之后:打什么音节定什么字。
+        let lex = Lexicon::from_lines("xu 需 9000\nxuan 选 100\nan 安 500\n");
+        let cands = first_syllable_chars(&lex, "xuan", 90);
+        assert_eq!(cands[0].text, "选", "长音节字应优先于短切分高频字: {cands:?}");
+        assert!(cands.iter().any(|c| c.text == "需"), "短切分字仍在候选后部");
     }
 
     #[test]
