@@ -97,15 +97,18 @@ fn page_boundaries_and_reset() {
     s.on_keysym(&e, 'a' as u32);
     s.on_keysym(&e, K::KEY_equal);
     assert_eq!(s.page, 1);
-    // 末页再按 `=` 越界:落入丢弃分支(键转发)
+    // 末页再按 `=` 越界:消费但不动,候选保留(不取消上屏)
     let r = s.on_keysym(&e, K::KEY_equal);
-    assert!(!r.consumed && !s.composing());
-    // 重新输入后页码重置
+    assert!(r.consumed && s.composing() && s.page == 1);
+    // 回第 0 页,再按 `-` 不能上翻:消费但不动,候选保留
+    s.on_keysym(&e, K::KEY_minus);
+    assert_eq!(s.page, 0);
+    let r = s.on_keysym(&e, K::KEY_minus);
+    assert!(r.consumed && s.composing() && s.page == 0);
+    // Escape 重输后页码重置
+    s.on_keysym(&e, K::KEY_Escape);
     s.on_keysym(&e, 'a' as u32);
     assert_eq!(s.page, 0);
-    // 第 0 页按 `-` 不能上翻:丢弃拼音、键转发
-    let r = s.on_keysym(&e, K::KEY_minus);
-    assert!(!r.consumed && !s.composing());
 }
 #[test]
 fn cn_punct_commit() {
@@ -205,4 +208,18 @@ fn shift_click_while_composing_clears_buffer() {
     s.on_keysym(&e, K::KEY_Shift_L);
     assert!(s.on_release(K::KEY_Shift_L));
     assert!(s.english && !s.composing(), "切入英文应清空拼音缓冲,候选窗随之隐藏");
+}
+#[test]
+fn page_keys_at_boundary_dont_dismiss() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    s.on_keysym(&e, 'n' as u32);
+    s.on_keysym(&e, 'i' as u32); // 仅"你"一候选(单页,第一页=最后一页)
+    // 第一页按 `-`:消费但不动,候选不取消、不上屏
+    let r = s.on_keysym(&e, K::KEY_minus);
+    assert!(r.consumed && r.commit.is_none() && s.composing() && s.page == 0);
+    // 最后一页按 `=`:消费但不动,候选不取消、不上屏
+    let r = s.on_keysym(&e, K::KEY_equal);
+    assert!(r.consumed && r.commit.is_none() && s.composing() && s.page == 0);
 }

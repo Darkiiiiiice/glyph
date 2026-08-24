@@ -103,13 +103,21 @@ impl Session {
             }
             // 翻页:`-` 上一页、`=` 下一页(避开 `,` `.`,留给中文标点)。
             // 拼音不变,仅 preedit_dirty 触发候选窗重绘当前页。
-            K::KEY_minus if self.composing() && self.page > 0 => {
-                self.page -= 1;
-                Reply { consumed: true, preedit_dirty: true, ..Default::default() }
+            // 组字中 `-`/`=` 始终消费:不能翻时(第一页/最后一页)忽略,否则守卫失败会落到
+            // 标点/无关键分支误上屏、取消候选。页变了才 preedit_dirty 触发重绘。
+            K::KEY_minus if self.composing() => {
+                let moved = self.page > 0;
+                if moved {
+                    self.page -= 1;
+                }
+                Reply { consumed: true, preedit_dirty: moved, ..Default::default() }
             }
-            K::KEY_equal if self.composing() && (self.page + 1) * PAGE < self.candidates.len() => {
-                self.page += 1;
-                Reply { consumed: true, preedit_dirty: true, ..Default::default() }
+            K::KEY_equal if self.composing() => {
+                let moved = (self.page + 1) * PAGE < self.candidates.len();
+                if moved {
+                    self.page += 1;
+                }
+                Reply { consumed: true, preedit_dirty: moved, ..Default::default() }
             }
             K::KEY_Return if self.composing() => {
                 let text = self.buffer.clone();
