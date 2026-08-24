@@ -25,11 +25,18 @@ pub struct Session {
     pub candidates: Vec<Candidate>,
     /// 当前页码(0-based),输入变化/上屏时重置。
     page: usize,
+    /// 中文标点模式:标点键上屏全角标点;`Ctrl+.` 切换中/英。
+    punct_cn: bool,
 }
 
 impl Session {
     pub fn new() -> Self {
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0 }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn: true }
+    }
+    /// 切换中/英文标点模式,返回新模式(true=中文)。
+    pub fn toggle_punct(&mut self) -> bool {
+        self.punct_cn = !self.punct_cn;
+        self.punct_cn
     }
 
     pub fn composing(&self) -> bool {
@@ -93,6 +100,22 @@ impl Session {
                 self.clear();
                 Reply { consumed: true, preedit_dirty: true, ..Default::default() }
             }
+            // 中文标点:组字中 = 上屏当前页首选+标点;空闲 = 直接上屏标点。
+            // 无候选时组字中标点上屏拼音原文+标点(不吞拼音)。
+            _ if self.punct_cn && cn_punct(sym).is_some() => {
+                let p = cn_punct(sym).unwrap();
+                if self.composing() {
+                    let first = self
+                        .candidates
+                        .get(self.page * PAGE)
+                        .map(|c| c.text.clone())
+                        .unwrap_or_else(|| self.buffer.clone());
+                    self.clear();
+                    Reply { consumed: true, commit: Some(first + p), preedit_dirty: true, ..Default::default() }
+                } else {
+                    Reply { consumed: true, commit: Some(p.to_string()), ..Default::default() }
+                }
+            }
             // 其余键:若正在组字则丢弃拼音(简化决策),键本身转发
             _ => {
                 if self.composing() {
@@ -128,115 +151,25 @@ impl Session {
         &self.candidates[start..(start + PAGE).min(self.candidates.len())]
     }
 }
+/// 中文标点映射(中文标点模式下,无修饰键的标点键 → 全角标点)。
+/// 顿号 `、` 用反斜杠 `\`(中文输入惯例)。引号智能配对复杂,暂不在此列。
+fn cn_punct(sym: u32) -> Option<&'static str> {
+    use xkbcommon::xkb::keysyms as K;
+    Some(match sym {
+        K::KEY_comma => ",",
+        K::KEY_period => "。",
+        K::KEY_semicolon => ";",
+        K::KEY_colon => ":",
+        K::KEY_question => "?",
+        K::KEY_exclam => "!",
+        K::KEY_parenleft => "(",
+        K::KEY_parenright => ")",
+        K::KEY_backslash => "、",
+        K::KEY_less => "<",
+        K::KEY_greater => ">",
+        _ => return None,
+    })
+}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fixture() -> Engine {
-        Engine::from_str("ni'hao 你好 10000\nni 你 500\nhao 好 300\n")
-    }
-
-    #[test]
-    fn letters_accumulate_and_commit_on_number() {
-        let e = fixture();
-        let mut s = Session::new();
-        for ch in ['n', 'i', 'h', 'a', 'o'] {
-            let r = s.on_keysym(&e, ch as u32);
-            assert!(r.consumed && r.preedit_dirty);
-        }
-        assert_eq!(s.buffer, "nihao");
-        assert_eq!(s.render_preedit(), "nihao", "preedit 只显拼音,候选交给候选窗");
-        let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_1);
-        assert_eq!(r.commit.as_deref(), Some("你好"));
-        assert!(s.buffer.is_empty());
-    }
-
-    #[test]
-    fn space_commits_first_candidate() {
-        let e = fixture();
-        let mut s = Session::new();
-        s.on_keysym(&e, 'n' as u32);
-        s.on_keysym(&e, 'i' as u32);
-        let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_space);
-        assert_eq!(r.commit.as_deref(), Some("你"));
-    }
-
-    #[test]
-    fn backspace_edits_buffer_then_forwards_when_empty() {
-        let e = fixture();
-        let mut s = Session::new();
-        s.on_keysym(&e, 'n' as u32);
-        let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_BackSpace);
-        assert!(r.consumed && s.buffer.is_empty());
-        // buffer 已空:backspace 属于应用(删文本)
-        let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_BackSpace);
-        assert!(!r.consumed);
-    }
-
-    #[test]
-    fn escape_cancels_without_commit() {
-        let e = fixture();
-        let mut s = Session::new();
-        s.on_keysym(&e, 'n' as u32);
-        let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_Escape);
-        assert!(r.consumed && r.commit.is_none() && r.preedit_dirty);
-        assert!(!s.composing());
-    }
-
-    #[test]
-    fn unrelated_key_forwards_and_drops_buffer() {
-        let e = fixture();
-        let mut s = Session::new();
-        s.on_keysym(&e, 'n' as u32);
-        let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_F1);
-        assert!(!r.consumed && r.commit.is_none());
-        assert!(!s.composing());
-    }
-    /// 构造 12 个同音节候选的引擎,用于翻页测试(词频递减 → 排序 w1..w12)。
-    fn paged_fixture() -> Engine {
-        let mut lex = String::new();
-        for i in 1..=12 {
-            lex.push_str(&format!("a w{} {}\n", i, 100 - i));
-        }
-        Engine::from_str(&lex)
-    }
-
-    #[test]
-    fn paging_via_minus_equal() {
-        use xkbcommon::xkb::keysyms as K;
-        let e = paged_fixture();
-        let mut s = Session::new();
-        s.on_keysym(&e, 'a' as u32);
-        assert_eq!(s.candidates.len(), 12, "候选池应取满 12 个(非 9)");
-        assert_eq!(s.page_candidates().len(), 9);
-        assert_eq!(s.page_candidates()[0].text, "w1");
-        // 下一页:`=`
-        let r = s.on_keysym(&e, K::KEY_equal);
-        assert!(r.consumed && r.preedit_dirty);
-        assert_eq!(s.page_candidates().len(), 3, "末页剩 3 个");
-        assert_eq!(s.page_candidates()[0].text, "w10");
-        // 数字选词选当前页页内第 k 个
-        let r = s.on_keysym(&e, K::KEY_1);
-        assert_eq!(r.commit.as_deref(), Some("w10"));
-    }
-
-    #[test]
-    fn page_boundaries_and_reset() {
-        use xkbcommon::xkb::keysyms as K;
-        let e = paged_fixture();
-        let mut s = Session::new();
-        s.on_keysym(&e, 'a' as u32);
-        s.on_keysym(&e, K::KEY_equal);
-        assert_eq!(s.page, 1);
-        // 末页再按 `=` 越界:落入丢弃分支(键转发)
-        let r = s.on_keysym(&e, K::KEY_equal);
-        assert!(!r.consumed && !s.composing());
-        // 重新输入后页码重置
-        s.on_keysym(&e, 'a' as u32);
-        assert_eq!(s.page, 0);
-        // 第 0 页按 `-` 不能上翻:丢弃拼音、键转发
-        let r = s.on_keysym(&e, K::KEY_minus);
-        assert!(!r.consumed && !s.composing());
-    }
-}
+mod tests;

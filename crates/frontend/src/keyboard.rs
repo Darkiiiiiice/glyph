@@ -110,10 +110,18 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
         // Ctrl/Alt/Super 按住时,字母键是快捷键而非拼音输入(xkb 对带修饰的
         // 字母仍返回小写 keysym),必须转发给 compositor/应用。
         // Shift 不用特判:shift+a 的 keysym 是大写 A,天然不进字母分支。
-        let shortcut =
-            state.xkb_state.as_ref().is_some_and(|xs| has_shortcut_modifier(xs));
-        let reply = if shortcut {
-            crate::session::Reply::default() // 不消费
+        let xs = state.xkb_state.as_ref();
+        let ctrl = xs.is_some_and(|x| {
+            x.mod_name_is_active(xkb::MOD_NAME_CTRL, xkb::STATE_MODS_EFFECTIVE)
+        });
+        let shortcut = xs.is_some_and(has_shortcut_modifier);
+        let reply = if ctrl && sym == xkb::keysyms::KEY_period {
+            // Ctrl+. 切换中/英文标点:IME 消费该组合键,不转发给应用。
+            let cn = state.session.toggle_punct();
+            log::info!("标点模式: {}", if cn { "中文" } else { "英文" });
+            crate::session::Reply { consumed: true, ..Default::default() }
+        } else if shortcut {
+            crate::session::Reply::default() // 其余快捷键不消费,转发
         } else {
             state.session.on_keysym(&state.engine, sym)
         };
