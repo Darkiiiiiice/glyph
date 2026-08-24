@@ -223,3 +223,43 @@ fn page_keys_at_boundary_dont_dismiss() {
     let r = s.on_keysym(&e, K::KEY_equal);
     assert!(r.consumed && r.commit.is_none() && s.composing() && s.page == 0);
 }
+
+#[test]
+fn pick_prefix_keeps_remaining_pinyin() {
+    let e = fixture();
+    let mut s = Session::new(true);
+    for ch in "nihao".chars() {
+        s.on_keysym(&e, ch as u32);
+    }
+    assert_eq!(s.buffer, "nihao");
+    // 首词候选"你"只消耗 ni(2 字节)。
+    let (text, consumed) = s
+        .candidates
+        .iter()
+        .find(|c| c.text == "你" && c.consumed == 2)
+        .map(|c| (c.text.clone(), c.consumed))
+        .expect("应有首词候选\"你\"");
+    let reply = s.pick(&e, text, consumed);
+    assert_eq!(reply.commit.as_deref(), Some("你"));
+    assert_eq!(s.buffer, "hao", "选中首词后剩余拼音继续组字");
+    assert!(s.candidates.iter().any(|c| c.text == "好"), "剩余 hao 应转出\"好\"");
+}
+
+#[test]
+fn pick_full_candidate_clears_buffer() {
+    let e = fixture();
+    let mut s = Session::new(true);
+    for ch in "nihao".chars() {
+        s.on_keysym(&e, ch as u32);
+    }
+    let (text, consumed) = s
+        .candidates
+        .iter()
+        .find(|c| c.text == "你好")
+        .map(|c| (c.text.clone(), c.consumed))
+        .unwrap();
+    let reply = s.pick(&e, text, consumed);
+    assert_eq!(reply.commit.as_deref(), Some("你好"));
+    assert_eq!(s.buffer, "", "整句候选应清空缓冲");
+    assert!(s.candidates.is_empty());
+}

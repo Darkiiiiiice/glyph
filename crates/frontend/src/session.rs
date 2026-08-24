@@ -76,18 +76,16 @@ impl Session {
                 let idx = (sym - K::KEY_1) as usize;
                 match self.candidates.get(self.page * PAGE + idx) {
                     Some(c) => {
-                        let text = c.text.clone();
-                        self.clear();
-                        Reply { consumed: true, commit: Some(text), preedit_dirty: true, ..Default::default() }
+                        let (text, consumed) = (c.text.clone(), c.consumed);
+                        self.pick(engine, text, consumed)
                     }
                     None => Reply { consumed: true, ..Default::default() },
                 }
             }
             K::KEY_space if self.composing() => match self.candidates.get(self.page * PAGE) {
                 Some(c) => {
-                    let text = c.text.clone();
-                    self.clear();
-                    Reply { consumed: true, commit: Some(text), preedit_dirty: true, ..Default::default() }
+                    let (text, consumed) = (c.text.clone(), c.consumed);
+                    self.pick(engine, text, consumed)
                 }
                 None => {
                     // 无候选:上屏原文,避免吞键
@@ -131,7 +129,7 @@ impl Session {
             // 中文标点(含引号配对):组字中 = 上屏当前页首选+标点;空闲 = 直接上屏标点。
             _ if self.punct_cn && is_punct_key(sym) => {
                 let p = self.punct_of(sym).unwrap();
-                self.commit_punct(p)
+                self.commit_punct(engine, p)
             }
             // 修饰键本身(Shift/Ctrl/Alt/Super 的 press):只改修饰状态,不影响组字、
             // 不上屏,直接转发。否则组字中按 Shift 欲打引号,会误触发下方的"上屏拼音原文"。
@@ -184,21 +182,47 @@ impl Session {
         self.candidates.clear();
         self.page = 0;
     }
+
+    /// 选中候选:上屏 text;若候选只消耗前缀拼音(首词/逐字选择),截掉已消耗
+    /// 部分、剩余拼音重新转换继续组字;否则(整句/无剩余)清空。
+    fn pick(&mut self, engine: &Engine, text: String, consumed: usize) -> Reply {
+        let total = self.buffer.bytes().filter(|&b| b != b'\'').count();
+        if consumed >= total {
+            self.clear();
+        } else {
+            // 部分上屏:截掉已消耗拼音(跳过穿插的 '),剩余重新转换继续组字。
+            let cut = {
+                let bytes = self.buffer.as_bytes();
+                let mut n = consumed;
+                let mut i = 0;
+                while n > 0 && i < bytes.len() {
+                    if bytes[i] != b'\'' {
+                        n -= 1;
+                    }
+                    i += 1;
+                }
+                i
+            };
+            self.buffer.drain(..cut);
+            self.refresh(engine);
+        }
+        Reply { consumed: true, commit: Some(text), preedit_dirty: true, ..Default::default() }
+    }
     /// 当前页候选(候选窗渲染的数据源)。
     pub fn page_candidates(&self) -> &[Candidate] {
         let start = (self.page * PAGE).min(self.candidates.len());
         &self.candidates[start..(start + PAGE).min(self.candidates.len())]
     }
     /// 上屏标点:组字中 = 当前页首选+标点(无候选则拼音原文+标点);空闲 = 直接标点。
-    fn commit_punct(&mut self, p: &str) -> Reply {
+    /// 首选为首词(部分消耗)时上屏首词+标点、剩余拼音继续组字。
+    fn commit_punct(&mut self, engine: &Engine, p: &str) -> Reply {
         if self.composing() {
-            let first = self
+            let (text, consumed) = self
                 .candidates
                 .get(self.page * PAGE)
-                .map(|c| c.text.clone())
-                .unwrap_or_else(|| self.buffer.clone());
-            self.clear();
-            Reply { consumed: true, commit: Some(first + p), preedit_dirty: true, ..Default::default() }
+                .map(|c| (c.text.clone(), c.consumed))
+                .unwrap_or_else(|| (self.buffer.clone(), usize::MAX));
+            self.pick(engine, text + p, consumed)
         } else {
             Reply { consumed: true, commit: Some(p.to_string()), ..Default::default() }
         }

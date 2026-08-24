@@ -19,6 +19,9 @@ pub struct Candidate {
     pub words: Vec<String>,
     /// 对数概率得分，越大越好。
     pub score: f64,
+    /// 该候选消耗的拼音字节数（相对去掉 `'` 的输入）。整句候选 = 输入全长；
+    /// 首词候选 < 全长——选中后只消耗前缀拼音，剩余继续组字（逐字/逐词选择）。
+    pub consumed: usize,
 }
 
 /// 每个字节位置保留的最大路径数。
@@ -37,9 +40,14 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
 
     // 词边按终点归桶：incoming[end] = [(起点, 词, 词频)]
     let mut incoming: Vec<Vec<(usize, &str, u32)>> = vec![Vec::new(); len + 1];
+    // 首词候选(逐字/逐词选择):位置 0 出发、未覆盖全输入的词边,记下消耗字节数。
+    let mut prefix: Vec<(usize, &str, u32)> = Vec::new();
     lex.for_each_word_edge(&lattice, |start, end, words| {
         for (word, freq) in words.iter().take(EDGE_WORD_CAP) {
             incoming[end].push((start, word.as_str(), *freq));
+            if start == 0 && end < len {
+                prefix.push((end, word.as_str(), *freq));
+            }
         }
     });
 
@@ -69,6 +77,7 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
             text: words.concat(),
             words: words.iter().map(|w| w.to_string()).collect(),
             score: *score,
+            consumed: len,
         })
         .collect();
 
@@ -80,26 +89,38 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
                 text: word.clone(),
                 words: vec![word.clone()],
                 score: (*freq as f64 / total).ln(),
+                consumed: len,
             });
         }
     }
 
-    // 统一去重:保留先出现者(DP 全拼在前,优先于同文本的简拼)。
+    // 首词候选并入(consumed<len 标记部分消耗,供逐字/逐词选择)。
+    for (end, word, freq) in prefix {
+        cands.push(Candidate {
+            text: word.to_string(),
+            words: vec![word.to_string()],
+            score: (freq as f64 / total).ln(),
+            consumed: end,
+        });
+    }
+
+    // 统一去重:保留先出现者(DP 全拼在前,优先于同文本的简拼/首词)。
     let mut seen = HashSet::new();
     cands.retain(|c| seen.insert(c.text.clone()));
 
-    // 统一排序:静态 score + 用户调频增量(无用户数据时增量 ln(1)=0,即纯静态
-    // 序)。简拼与全拼一起排序,高分简拼不会被 take 截断。score 字段保持原始
-    // 对数概率不被污染,只影响次序。
-    let mut ranked: Vec<(f64, Candidate)> = cands
+    // 排序:静态 score + 用户调频增量(无用户数据时增量 ln(1)=0)。分两组:
+    // 整句候选(消耗全部拼音)在前——多字输入主选整句;首词候选(部分消耗)
+    // 在后附加,供逐字/逐词选择。score 字段保持原始对数概率不被污染,只影响次序。
+    let (mut full, mut rest): (Vec<(f64, Candidate)>, Vec<(f64, Candidate)>) = cands
         .into_iter()
         .map(|c| {
             let boost = lex.user_freq.get(&c.text).copied().unwrap_or(0);
             (c.score + (1.0 + boost as f64).ln() * USER_W, c)
         })
-        .collect();
-    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-    ranked.into_iter().take(limit).map(|(_, c)| c).collect()
+        .partition(|(_, c)| c.consumed >= len);
+    full.sort_by(|a, b| b.0.total_cmp(&a.0));
+    rest.sort_by(|a, b| b.0.total_cmp(&a.0));
+    full.into_iter().chain(rest).take(limit).map(|(_, c)| c).collect()
 }
 
 /// 用户调频权重:被选 1 次等效于静态词频自然对数提升 USER_W 倍。
@@ -149,6 +170,21 @@ mod tests {
     #[test]
     fn unknown_input_yields_nothing() {
         assert!(convert(&fixture(), "zzz", 9).is_empty());
+    }
+
+    #[test]
+    fn prefix_candidates_enable_char_by_char() {
+        let cands = convert(&fixture(), "nihao", 90);
+        // 整句候选消耗全部拼音(5 字节 nihao)。
+        let full = cands.iter().find(|c| c.text == "你好").unwrap();
+        assert_eq!(full.consumed, 5, "整句候选消耗全部拼音");
+        // 首词候选"你"只消耗 ni(2 字节),供逐字选择。
+        let zi = cands.iter().find(|c| c.text == "你").unwrap();
+        assert_eq!(zi.consumed, 2, "首词候选只消耗第一音节");
+        // 整句排在首词前(多字输入主选整句)。
+        let pos_full = cands.iter().position(|c| c.text == "你好").unwrap();
+        let pos_zi = cands.iter().position(|c| c.text == "你").unwrap();
+        assert!(pos_full < pos_zi, "整句候选应排在首词前: {cands:?}");
     }
 
     #[test]
