@@ -270,4 +270,33 @@ mod tests {
         // 无声母 key 的输入仍为空
         assert!(convert(&lex, "zzz", 9).is_empty());
     }
+
+    #[test]
+    fn bigram_narrow_gap_flips_once_and_recovers() {
+        // 窄 gap(世纪 21100 vs 实际 12010,ln gap≈0.56):1 次搭配即翻盘,对称各 1 次恢复静态序。
+        // "一次即学"是刻意行为(与 USER_W 同量纲);翻转只在相邻名次间,两词始终前二可见。
+        let mut lex = Lexicon::from_lines("wo'men 我们 9000\nshi'ji 世纪 21100\nshi'ji 实际 12010\n");
+        let prev = Some("我们");
+        assert_eq!(convert_ctx(&lex, "shiji", 9, prev)[0].text, "世纪");
+        lex.user_bigram.entry("我们".to_string()).or_default().insert("实际".to_string(), 1);
+        assert_eq!(convert_ctx(&lex, "shiji", 9, prev)[0].text, "实际", "1 次搭配应翻窄 gap");
+        lex.user_bigram.get_mut("我们").unwrap().insert("世纪".to_string(), 1);
+        assert_eq!(convert_ctx(&lex, "shiji", 9, prev)[0].text, "世纪", "对称各 1 次应恢复静态序");
+    }
+
+    #[test]
+    fn bigram_wide_gap_requires_dominant_usage() {
+        // 宽 gap(探索 2653 vs 坍缩 3,ln gap≈6.78):交替使用(7:6)永不翻盘,独占 3 次才翻。
+        // 交替 = 上下文无区分度,bigram 正确弃权给静态先验;宽 gap 从不抖动。
+        let mut lex = Lexicon::from_lines("wo'men 我们 9000\ntan'suo 探索 2653\ntan'suo 坍缩 3\n");
+        let prev = Some("我们");
+        let m = lex.user_bigram.entry("我们".to_string()).or_default();
+        m.insert("坍缩".to_string(), 7);
+        m.insert("探索".to_string(), 6);
+        assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "探索", "交替使用时 bigram 应弃权");
+        let m = lex.user_bigram.get_mut("我们").unwrap();
+        m.insert("坍缩".to_string(), 3);
+        m.insert("探索".to_string(), 0);
+        assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "坍缩", "独占 3 次应翻宽 gap");
+    }
 }
