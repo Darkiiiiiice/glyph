@@ -73,7 +73,7 @@ im-v2 连 niri → 键盘 grab → preedit 发进应用 → **im-v2 commit_strin
 **✅ 冷启动 bigram 2026-08-24 完成**(commit `4b44e06`)。无外部语料(rime-essay 是 LGPL-3.0,不符本项目 MIT-only 数据约束),搭配从用户输入历史积累:`user_bigram`(上文尾词→{当前词→次数});`convert_ctx` 重排叠加 `BIGRAM_W·ln(1+搭配次数)`(BIGRAM_W=6,与 USER_W 同量纲);Session 记 `prev_word`,pick 时 `learn_bigram`(上文尾词→本次首词)并更新上文;落盘 `user_bigram.txt`(与 user_freq 同目录,随 commit 写)。单测覆盖 engine 上浮+持久化、session prev_word 传递。
 **验收**:反复"我们→学习"后,打"我们"再打 xuexi,"学习"提前(随使用积累生效)。
 
-**调校结论**(2026-08-24,`BIGRAM_W=6` 不变)。真实词库 34,065 个同音词组的静态 gap 分布:p50=1.39(4x)、p90=4.20(67x)、p99=6.78(884x);W=6 下 1 次搭配翻 p90、3 次翻 ~4000x,响应足够。交替竞争 race(模拟+引擎契约测试双验证):窄 gap 对前 ~W/gap 轮呈"最近所选居首"(翻转限于相邻名次,两词始终前二可见,等价 recency 镜像),之后 Δboost=W·ln(1+1/n) 衰减到 gap 以下,静态先验正确弃权;宽 gap 对交替使用**永不翻盘**,须独占使用——上下文无区分度时 bigram 不干预。否决替代方案:min-count 门槛(与 USER_W 一次即学的既定手感不一致,且双方 count 过门槛后 jitter 原样保留)、count²/total 概率归一(高频上文稀释死锁:`我们`积累 2000 条搭配后新窄 gap 习惯需 ~14 次才学会,比装饰性 jitter 更糟)。契约测试:`bigram_narrow_gap_flips_once_and_recovers`、`bigram_wide_gap_requires_dominant_usage`(segment.rs)。
+**调校结论**(2026-08-24,`BIGRAM_W=6` 不变)。真实词库 34,065 个同音词组的静态 gap 分布:p50=1.39(4x)、p90=4.20(67x)、p99=6.78(884x);W=6 下 1 次搭配翻 p90、3 次翻 ~4000x,响应足够。交替竞争 race(模拟+引擎契约测试双验证):窄 gap 对前 ~W/gap 轮呈"最近所选居首"(翻转限于相邻名次,两词始终前二可见,等价 recency 镜像),之后 Δboost=W·ln(1+1/n) 衰减到 gap 以下,静态先验正确弃权;宽 gap 对交替使用**永不翻盘**,须独占使用——上下文无区分度时 bigram 不干预;翻盘后恢复同样便宜:1 次反向选择即刻夺回(坍缩×3 翻盘后探索×1,Δboost=6·ln2=4.16<gap 6.78,静态锚主场优势),再翻需追到 6:1——误翻成本极低,进一步支持 W=6。否决替代方案:min-count 门槛(与 USER_W 一次即学的既定手感不一致,且双方 count 过门槛后 jitter 原样保留)、count²/total 概率归一(高频上文稀释死锁:`我们`积累 2000 条搭配后新窄 gap 习惯需 ~14 次才学会,比装饰性 jitter 更糟)。契约测试:`bigram_narrow_gap_flips_once_and_recovers`、`bigram_wide_gap_requires_dominant_usage`(segment.rs)。
 
 ### M4 毕业项目
 niri 侧协议修复 + 上游 PR。输入法 + 合成器两端全掌握，是本项目独有的学习场景。

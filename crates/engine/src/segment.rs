@@ -298,5 +298,13 @@ mod tests {
         m.insert("坍缩".to_string(), 3);
         m.insert("探索".to_string(), 0);
         assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "坍缩", "独占 3 次应翻宽 gap");
+        // 翻盘后恢复极便宜:探索×1,Δboost=6·ln(4/2)=4.16 < gap 6.78,静态锚即刻夺回首位。
+        lex.user_bigram.get_mut("我们").unwrap().insert("探索".to_string(), 1);
+        assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "探索", "1 次反向选择应即刻恢复");
+        // 但锚不锁死:坍缩追到 6:1(Δboost=6·ln3.5≈7.52>6.78)再次翻盘。
+        lex.user_bigram.get_mut("我们").unwrap().insert("坍缩".to_string(), 5);
+        assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "探索", "5:1 仍不够");
+        lex.user_bigram.get_mut("我们").unwrap().insert("坍缩".to_string(), 6);
+        assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "坍缩", "6:1 应再翻盘");
     }
 }
