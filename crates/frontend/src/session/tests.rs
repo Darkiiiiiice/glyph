@@ -57,7 +57,8 @@ fn unrelated_key_forwards_and_drops_buffer() {
     let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
     let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_F1);
-    assert!(!r.consumed && r.commit.is_none());
+    assert!(!r.consumed, "键仍转发给应用");
+        assert_eq!(r.commit.as_deref(), Some("n"), "组字中无关键上屏拼音原文,不丢输入");
     assert!(!s.composing());
 }
 /// 构造 12 个同音节候选的引擎,用于翻页测试(词频递减 → 排序 w1..w12)。
@@ -136,4 +137,17 @@ fn punct_english_mode_passthrough() {
     s.toggle_punct();
     let r = s.on_keysym(&e, K::KEY_comma);
     assert_eq!(r.commit.as_deref(), Some(","));
+}
+#[test]
+fn quote_pairs_alternate() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    // 双引号开闭交替
+    assert_eq!(s.on_keysym(&e, K::KEY_quotedbl).commit.as_deref(), Some("\u{201C}"));
+    assert_eq!(s.on_keysym(&e, K::KEY_quotedbl).commit.as_deref(), Some("\u{201D}"));
+    assert_eq!(s.on_keysym(&e, K::KEY_quotedbl).commit.as_deref(), Some("\u{201C}"));
+    // 单引号独立配对
+    assert_eq!(s.on_keysym(&e, K::KEY_apostrophe).commit.as_deref(), Some("\u{2018}"));
+    assert_eq!(s.on_keysym(&e, K::KEY_apostrophe).commit.as_deref(), Some("\u{2019}"));
 }

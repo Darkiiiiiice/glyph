@@ -27,11 +27,14 @@ pub struct Session {
     page: usize,
     /// 中文标点模式:标点键上屏全角标点;`Ctrl+.` 切换中/英。
     punct_cn: bool,
+    /// 双/单引号配对状态:true = 下次出闭引号。跨句保留(引号配对是全局输入状态)。
+    dquote_open: bool,
+    squote_open: bool,
 }
 
 impl Session {
     pub fn new(punct_cn: bool) -> Self {
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {
@@ -100,27 +103,17 @@ impl Session {
                 self.clear();
                 Reply { consumed: true, preedit_dirty: true, ..Default::default() }
             }
-            // 中文标点:组字中 = 上屏当前页首选+标点;空闲 = 直接上屏标点。
-            // 无候选时组字中标点上屏拼音原文+标点(不吞拼音)。
-            _ if self.punct_cn && cn_punct(sym).is_some() => {
-                let p = cn_punct(sym).unwrap();
-                if self.composing() {
-                    let first = self
-                        .candidates
-                        .get(self.page * PAGE)
-                        .map(|c| c.text.clone())
-                        .unwrap_or_else(|| self.buffer.clone());
-                    self.clear();
-                    Reply { consumed: true, commit: Some(first + p), preedit_dirty: true, ..Default::default() }
-                } else {
-                    Reply { consumed: true, commit: Some(p.to_string()), ..Default::default() }
-                }
+            // 中文标点(含引号配对):组字中 = 上屏当前页首选+标点;空闲 = 直接上屏标点。
+            _ if self.punct_cn && is_punct_key(sym) => {
+                let p = self.punct_of(sym).unwrap();
+                self.commit_punct(p)
             }
-            // 其余键:若正在组字则丢弃拼音(简化决策),键本身转发
+            // 其余键:组字中先上屏拼音原文(不丢已敲字母),键本身转发给应用。
             _ => {
                 if self.composing() {
+                    let text = self.buffer.clone();
                     self.clear();
-                    Reply { consumed: false, preedit_dirty: true, ..Default::default() }
+                    Reply { consumed: false, commit: Some(text), preedit_dirty: true, ..Default::default() }
                 } else {
                     Reply::default()
                 }
@@ -150,6 +143,38 @@ impl Session {
         let start = (self.page * PAGE).min(self.candidates.len());
         &self.candidates[start..(start + PAGE).min(self.candidates.len())]
     }
+    /// 上屏标点:组字中 = 当前页首选+标点(无候选则拼音原文+标点);空闲 = 直接标点。
+    fn commit_punct(&mut self, p: &str) -> Reply {
+        if self.composing() {
+            let first = self
+                .candidates
+                .get(self.page * PAGE)
+                .map(|c| c.text.clone())
+                .unwrap_or_else(|| self.buffer.clone());
+            self.clear();
+            Reply { consumed: true, commit: Some(first + p), preedit_dirty: true, ..Default::default() }
+        } else {
+            Reply { consumed: true, commit: Some(p.to_string()), ..Default::default() }
+        }
+    }
+
+    /// 标点符号(引号做开闭配对)。仅 punct_cn 模式调用;调用即翻转引号状态。
+    fn punct_of(&mut self, sym: u32) -> Option<&'static str> {
+        use xkbcommon::xkb::keysyms as K;
+        Some(match sym {
+            K::KEY_quotedbl => {
+                let p = if self.dquote_open { "\u{201D}" } else { "\u{201C}" };
+                self.dquote_open = !self.dquote_open;
+                p
+            }
+            K::KEY_apostrophe => {
+                let p = if self.squote_open { "\u{2019}" } else { "\u{2018}" };
+                self.squote_open = !self.squote_open;
+                p
+            }
+            _ => cn_punct(sym)?,
+        })
+    }
 }
 /// 中文标点映射(中文标点模式下,无修饰键的标点键 → 全角标点)。
 /// 顿号 `、` 用反斜杠 `\`(中文输入惯例)。引号智能配对复杂,暂不在此列。
@@ -169,6 +194,13 @@ fn cn_punct(sym: u32) -> Option<&'static str> {
         K::KEY_greater => ">",
         _ => return None,
     })
+}
+/// 是否标点键(含引号)。无状态检查,供 match guard——punct_of 有状态(翻转引号),
+/// 不能在 guard 里调,否则一次按键翻转两次。
+fn is_punct_key(sym: u32) -> bool {
+    cn_punct(sym).is_some()
+        || sym == xkbcommon::xkb::keysyms::KEY_quotedbl
+        || sym == xkbcommon::xkb::keysyms::KEY_apostrophe
 }
 
 #[cfg(test)]
