@@ -137,7 +137,14 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
                 log::warn!("用户词频落盘失败: {e}");
             }
             ime::send_commit(state, &text);
-            crate::popup::hide(state); // 上屏后隐藏候选窗
+            // 部分上屏(选字后还有剩余拼音在组字):重发 preedit + 重绘候选窗继续;选完才隐藏。
+            if state.session.composing() {
+                let preedit = state.session.render_preedit();
+                ime::send_preedit(state, &preedit);
+                crate::popup::redraw(state, qh);
+            } else {
+                crate::popup::hide(state);
+            }
         } else if reply.preedit_dirty {
             let preedit = state.session.render_preedit();
             ime::send_preedit(state, &preedit);

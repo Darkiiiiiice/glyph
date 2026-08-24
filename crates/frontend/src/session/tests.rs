@@ -1,4 +1,5 @@
 use super::*;
+use xkbcommon::xkb::keysyms as K;
 
 fn fixture() -> Engine {
     Engine::from_str("ni'hao 你好 10000\nni 你 500\nhao 好 300\n")
@@ -72,7 +73,6 @@ fn paged_fixture() -> Engine {
 
 #[test]
 fn paging_via_minus_equal() {
-    use xkbcommon::xkb::keysyms as K;
     let e = paged_fixture();
     let mut s = Session::new(true);
     s.on_keysym(&e, 'a' as u32);
@@ -91,7 +91,6 @@ fn paging_via_minus_equal() {
 
 #[test]
 fn page_boundaries_and_reset() {
-    use xkbcommon::xkb::keysyms as K;
     let e = paged_fixture();
     let mut s = Session::new(true);
     s.on_keysym(&e, 'a' as u32);
@@ -112,7 +111,6 @@ fn page_boundaries_and_reset() {
 }
 #[test]
 fn cn_punct_commit() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     // 空闲打 `.` → 中文句号
@@ -129,7 +127,6 @@ fn cn_punct_commit() {
 
 #[test]
 fn punct_english_mode_passthrough() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     s.toggle_punct(); // 切英文标点
@@ -143,7 +140,6 @@ fn punct_english_mode_passthrough() {
 }
 #[test]
 fn quote_pairs_alternate() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     // 双引号开闭交替
@@ -156,7 +152,6 @@ fn quote_pairs_alternate() {
 }
 #[test]
 fn modifier_keys_do_not_disturb_composing() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
@@ -168,7 +163,6 @@ fn modifier_keys_do_not_disturb_composing() {
 }
 #[test]
 fn shift_click_toggles_english() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     // 单击 Shift → 英文
@@ -188,7 +182,6 @@ fn shift_click_toggles_english() {
 
 #[test]
 fn shift_chord_is_not_click() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     s.on_keysym(&e, K::KEY_Shift_L);
@@ -198,7 +191,6 @@ fn shift_chord_is_not_click() {
 }
 #[test]
 fn shift_click_while_composing_clears_buffer() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
@@ -211,7 +203,6 @@ fn shift_click_while_composing_clears_buffer() {
 }
 #[test]
 fn page_keys_at_boundary_dont_dismiss() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
@@ -226,7 +217,6 @@ fn page_keys_at_boundary_dont_dismiss() {
 
 #[test]
 fn tab_char_mode_pick_char_keeps_remaining_pinyin() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     for ch in "nihao".chars() {
@@ -247,13 +237,22 @@ fn tab_char_mode_pick_char_keeps_remaining_pinyin() {
     let reply = s.pick(&e, text, consumed);
     assert_eq!(reply.commit.as_deref(), Some("你"));
     assert_eq!(s.buffer, "hao", "选字后剩余拼音继续组字");
-    assert!(!s.char_mode, "选字后回整句模式");
-    assert!(s.candidates.iter().any(|c| c.text == "好"), "剩余 hao 应转出\"好\"");
+    assert!(s.char_mode, "有剩余拼音时保持单字模式,连续逐字");
+    assert!(s.candidates.iter().all(|c| c.text.chars().count() == 1), "候选仍是单字");
+    // 连续选"好"(不用再按 Tab):选完退出单字模式
+    let (t2, c2) = s
+        .candidates
+        .iter()
+        .find(|c| c.text == "好")
+        .map(|c| (c.text.clone(), c.consumed))
+        .expect("hao 的单字应有\"好\"");
+    let reply = s.pick(&e, t2, c2);
+    assert_eq!(reply.commit.as_deref(), Some("好"));
+    assert!(!s.char_mode && !s.composing(), "选完退出单字模式");
 }
 
 #[test]
 fn tab_toggles_back_to_sentence_mode() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     for ch in "nihao".chars() {
@@ -261,15 +260,13 @@ fn tab_toggles_back_to_sentence_mode() {
     }
     s.on_keysym(&e, K::KEY_Tab);
     assert!(s.char_mode);
-    // 再按 Tab 回整句模式
-    s.on_keysym(&e, K::KEY_Tab);
+    s.on_keysym(&e, K::KEY_Tab); // 再按 Tab 回整句模式
     assert!(!s.char_mode);
     assert!(s.candidates.iter().any(|c| c.text == "你好"), "回整句后候选恢复整句");
 }
 
 #[test]
 fn escape_clears_char_mode() {
-    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);

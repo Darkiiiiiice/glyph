@@ -201,7 +201,7 @@ impl Session {
     /// 选中候选:上屏 text;若候选只消耗前缀拼音(首词/逐字选择),截掉已消耗
     /// 部分、剩余拼音重新转换继续组字;否则(整句/无剩余)清空。
     fn pick(&mut self, engine: &Engine, text: String, consumed: usize) -> Reply {
-        self.char_mode = false; // 选中即退出单字模式,剩余拼音回整句续打
+        // 单字模式部分上屏(有剩余拼音)时保持单字模式,连续逐字选下一字;选完走 clear 退出。
         let total = self.buffer.bytes().filter(|&b| b != b'\'').count();
         if consumed >= total {
             self.clear();
