@@ -3,6 +3,9 @@
 
 use glyph_engine::{Candidate, Engine};
 
+mod punct;
+use punct::{cn_punct, is_punct_key, is_modifier};
+
 /// 一次按键的处理结果。
 #[derive(Debug, Default, PartialEq)]
 pub struct Reply {
@@ -37,11 +40,13 @@ pub struct Session {
     shift_used: bool,
     /// Tab 单字模式:true = 候选窗显示首音节单字(逐字定字);false = 整句候选。
     char_mode: bool,
+    /// 上一次上屏的尾词(bigram 上文);跨组字保留,clear 不清。
+    prev_word: Option<String>,
 }
 
 impl Session {
     pub fn new(punct_cn: bool) -> Self {
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false, prev_word: None }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {
@@ -54,7 +59,7 @@ impl Session {
     }
 
     /// keysym 路由。sym 为 xkb keysym(已含 shift 等修饰后的结果)。
-    pub fn on_keysym(&mut self, engine: &Engine, sym: u32) -> Reply {
+    pub fn on_keysym(&mut self, engine: &mut Engine, sym: u32) -> Reply {
         use xkbcommon::xkb::keysyms as K;
         // Shift 单击检测:press 标记;期间搭配其他键则不算单击(release 时判定,见 on_release)。
         if sym == K::KEY_Shift_L || sym == K::KEY_Shift_R {
@@ -186,7 +191,7 @@ impl Session {
         } else if self.char_mode {
             engine.first_syllable_chars(&self.buffer, POOL)
         } else {
-            engine.convert(&self.buffer, POOL)
+            engine.convert_ctx(&self.buffer, POOL, self.prev_word.as_deref())
         };
         self.page = 0;
     }
@@ -200,7 +205,17 @@ impl Session {
 
     /// 选中候选:上屏 text;若候选只消耗前缀拼音(首词/逐字选择),截掉已消耗
     /// 部分、剩余拼音重新转换继续组字;否则(整句/无剩余)清空。
-    fn pick(&mut self, engine: &Engine, text: String, consumed: usize) -> Reply {
+    fn pick(&mut self, engine: &mut Engine, text: String, consumed: usize) -> Reply {
+        // bigram:上一次上屏尾词 → 本次首词。在 candidates 变化(clear/refresh)前取选中候选的分词。
+        let words = self.candidates.iter().find(|c| c.text == text && c.consumed == consumed).map(|c| c.words.clone());
+        if let Some(words) = words {
+            if let (Some(prev), Some(first)) = (self.prev_word.as_deref(), words.first()) {
+                engine.learn_bigram(prev, first);
+            }
+            if let Some(last) = words.last() {
+                self.prev_word = Some(last.clone());
+            }
+        }
         // 单字模式部分上屏(有剩余拼音)时保持单字模式,连续逐字选下一字;选完走 clear 退出。
         let total = self.buffer.bytes().filter(|&b| b != b'\'').count();
         if consumed >= total {
@@ -231,7 +246,7 @@ impl Session {
     }
     /// 上屏标点:组字中 = 当前页首选+标点(无候选则拼音原文+标点);空闲 = 直接标点。
     /// 首选为首词(部分消耗)时上屏首词+标点、剩余拼音继续组字。
-    fn commit_punct(&mut self, engine: &Engine, p: &str) -> Reply {
+    fn commit_punct(&mut self, engine: &mut Engine, p: &str) -> Reply {
         if self.composing() {
             let (text, consumed) = self
                 .candidates
@@ -261,38 +276,6 @@ impl Session {
             _ => cn_punct(sym)?,
         })
     }
-}
-/// 中文标点映射(中文标点模式下,无修饰键的标点键 → 全角标点)。
-/// 顿号 `、` 用反斜杠 `\`(中文输入惯例)。引号智能配对复杂,暂不在此列。
-fn cn_punct(sym: u32) -> Option<&'static str> {
-    use xkbcommon::xkb::keysyms as K;
-    Some(match sym {
-        K::KEY_comma => ",",
-        K::KEY_period => "。",
-        K::KEY_semicolon => ";",
-        K::KEY_colon => ":",
-        K::KEY_question => "?",
-        K::KEY_exclam => "!",
-        K::KEY_parenleft => "(",
-        K::KEY_parenright => ")",
-        K::KEY_backslash => "、",
-        K::KEY_less => "<",
-        K::KEY_greater => ">",
-        _ => return None,
-    })
-}
-/// 是否标点键(含引号)。无状态检查,供 match guard——punct_of 有状态(翻转引号),
-/// 不能在 guard 里调,否则一次按键翻转两次。
-fn is_punct_key(sym: u32) -> bool {
-    cn_punct(sym).is_some()
-        || sym == xkbcommon::xkb::keysyms::KEY_quotedbl
-        || sym == xkbcommon::xkb::keysyms::KEY_apostrophe
-}
-/// 是否修饰键的 press keysym(Shift/Ctrl/Alt/Super/Caps/Meta/Hyper 的 L/R,0xffe1-0xffee 段)。
-/// 修饰键只改修饰状态,不应触发上屏或打断组字。
-fn is_modifier(sym: u32) -> bool {
-    use xkbcommon::xkb::keysyms as K;
-    (K::KEY_Shift_L..=K::KEY_Hyper_R).contains(&sym)
 }
 
 #[cfg(test)]

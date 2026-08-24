@@ -32,6 +32,11 @@ const BEAM: usize = 100;
 const EDGE_WORD_CAP: usize = 32;
 
 pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
+    convert_ctx(lex, input, limit, None)
+}
+
+/// 带上文(bigram)的转换:`prev` 是上一次上屏的尾词;候选首词与其有用户搭配记录时额外上浮。
+pub fn convert_ctx(lex: &Lexicon, input: &str, limit: usize, prev: Option<&str>) -> Vec<Candidate> {
     let lattice = syllable::build_lattice(input, &lex.syllables);
     let len = lattice.text.len();
     if len == 0 {
@@ -93,13 +98,18 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
     let mut seen = HashSet::new();
     cands.retain(|c| seen.insert(c.text.clone()));
 
-    // 排序:静态 score + 用户调频增量(无用户数据时增量 ln(1)=0)。
+    // 排序:静态 score + 用户调频增量 + bigram 上文增量(无数据时增量 ln(1)=0)。
     // score 字段保持原始对数概率不被污染,只影响次序。
     let mut ranked: Vec<(f64, Candidate)> = cands
         .into_iter()
         .map(|c| {
             let boost = lex.user_freq.get(&c.text).copied().unwrap_or(0);
-            (c.score + (1.0 + boost as f64).ln() * USER_W, c)
+            let bigram = prev
+                .and_then(|p| lex.user_bigram.get(p))
+                .and_then(|m| c.words.first().and_then(|w| m.get(w.as_str())))
+                .copied()
+                .unwrap_or(0);
+            (c.score + (1.0 + boost as f64).ln() * USER_W + (1.0 + bigram as f64).ln() * BIGRAM_W, c)
         })
         .collect();
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -150,6 +160,10 @@ pub fn first_syllable_chars(lex: &Lexicon, input: &str, limit: usize) -> Vec<Can
 /// 静态概率差距可用到 ~7(低频词 vs 万频词),选 3 次需 ln(4)·6≈8.3 才能翻越,
 /// 故 USER_W=6 使"选过的低频词 3 次上浮到首位"成立;过高会让单次选择产生跳变。
 const USER_W: f64 = 6.0;
+
+/// bigram 上文搭配权重:候选首词与上一次上屏尾词的用户搭配次数的对数增量。
+/// 冷启动积累,与 USER_W 同量纲——搭配几次即可压过纯词频序,且被 ln 压顶避免霸榜。
+const BIGRAM_W: f64 = 6.0;
 
 #[cfg(test)]
 mod tests {

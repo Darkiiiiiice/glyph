@@ -28,6 +28,9 @@ pub struct Lexicon {
     /// 简拼索引:多字词各字声母连成的 key(你好→nh、中国→zhg) → [(词, 词频)],
     /// finish 时按词频降序。简拼是精确声母匹配,不参与音节格 DP。
     pub jianpin: HashMap<String, Vec<(String, u32)>>,
+    /// 用户二元搭配(bigram):上一次上屏的尾词 → {当前词 → 搭配次数}。
+    /// 冷启动从用户输入历史积累,无外部语料;嵌套 map 使查询免 tuple 分配。
+    pub user_bigram: HashMap<String, HashMap<String, u32>>,
 }
 
 impl Lexicon {
@@ -81,7 +84,7 @@ impl Lexicon {
     }
 
     fn empty() -> Self {
-        Self { root: Node::default(), syllables: HashSet::new(), total_freq: 0, user_freq: HashMap::new(), jianpin: HashMap::new() }
+        Self { root: Node::default(), syllables: HashSet::new(), total_freq: 0, user_freq: HashMap::new(), jianpin: HashMap::new(), user_bigram: HashMap::new() }
     }
 
     fn insert_line(&mut self, line: &str) -> Result<(), String> {

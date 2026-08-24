@@ -123,7 +123,7 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
         } else if shortcut {
             crate::session::Reply::default() // 其余快捷键不消费,转发
         } else {
-            state.session.on_keysym(&state.engine, sym)
+            state.session.on_keysym(&mut state.engine, sym)
         };
         log::debug!("key {key} sym={sym:#x} shortcut={shortcut} consumed={} commit={:?}", reply.consumed, reply.commit);
         state.consumed_keys.insert(key, reply.consumed);
@@ -135,6 +135,11 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
             }
             if let Err(e) = state.engine.save_user_freq(&state.user_freq_path) {
                 log::warn!("用户词频落盘失败: {e}");
+            }
+            // bigram 上文搭配落盘(与 user_freq 同目录派生路径 user_bigram.txt)
+            let bigram_path = state.user_freq_path.with_file_name("user_bigram.txt");
+            if let Err(e) = state.engine.save_bigram(&bigram_path) {
+                log::warn!("用户 bigram 落盘失败: {e}");
             }
             ime::send_commit(state, &text);
             // 部分上屏(选字后还有剩余拼音在组字):重发 preedit + 重绘候选窗继续;选完才隐藏。

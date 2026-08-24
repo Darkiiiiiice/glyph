@@ -56,6 +56,16 @@ fn main() -> ExitCode {
         Ok(_) => {} // 空文件/无数据
         Err(e) => log::warn!("用户词频加载失败 {}: {e}(忽略,首次运行正常)", uf.display()),
     }
+    // bigram 上文搭配加载(与 user_freq 同目录派生路径 user_bigram.txt)
+    let bp = uf.with_file_name("user_bigram.txt");
+    match Engine::load_bigram(&bp) {
+        Ok(map) if !map.is_empty() => {
+            log::info!("用户 bigram {} 组 ← {}", map.len(), bp.display());
+            engine.set_user_bigram(map);
+        }
+        Ok(_) => {}
+        Err(e) => log::warn!("用户 bigram 加载失败 {}: {e}(忽略,首次运行正常)", bp.display()),
+    }
     let config = config::Config::load();
     let (_conn, mut eq, mut state) = match globals::connect(engine, uf, config) {
         Ok(t) => t,

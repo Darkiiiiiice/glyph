@@ -37,6 +37,11 @@ impl Engine {
         segment::convert(&self.lexicon, input, limit)
     }
 
+    /// 带上文(bigram)的转换:`prev` 是上一次上屏的尾词,候选首词与其有搭配记录时上浮。
+    pub fn convert_ctx(&self, input: &str, limit: usize, prev: Option<&str>) -> Vec<Candidate> {
+        segment::convert_ctx(&self.lexicon, input, limit, prev)
+    }
+
     /// Tab 单字模式:第一音节的全部单字候选(见 segment::first_syllable_chars)。
     pub fn first_syllable_chars(&self, input: &str, limit: usize) -> Vec<Candidate> {
         segment::first_syllable_chars(&self.lexicon, input, limit)
@@ -51,6 +56,11 @@ impl Engine {
         else {
             self.lexicon.user_freq.insert(text.to_string(), 1);
         }
+    }
+
+    /// 记录一次上文搭配:prev(上一次上屏尾词) → cur(本次上屏的首词),次数 +1。
+    pub fn learn_bigram(&mut self, prev: &str, cur: &str) {
+        *self.lexicon.user_bigram.entry(prev.to_string()).or_default().entry(cur.to_string()).or_insert(0) += 1;
     }
 
     /// 已学到的用户词频（文本 → 次数）。
@@ -93,6 +103,41 @@ impl Engine {
         let mut out = String::new();
         for (word, count) in entries {
             out.push_str(&format!("{word} {count}\n"));
+        }
+        std::fs::write(path, out)
+    }
+
+    /// 从用户 bigram 文件加载(`上文 当前词 次数` 行);文件不存在时为空。
+    pub fn load_bigram(path: &Path) -> io::Result<std::collections::HashMap<String, std::collections::HashMap<String, u32>>> {
+        let mut map: std::collections::HashMap<String, std::collections::HashMap<String, u32>> = std::collections::HashMap::new();
+        for (lineno, line) in io::BufReader::new(std::fs::File::open(path)?).lines().enumerate() {
+            let line = line?;
+            let mut fields = line.split_whitespace();
+            let (Some(prev), Some(cur), Some(count)) = (fields.next(), fields.next(), fields.next()) else {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{}:{}: 缺 上文/当前词/次数 列", path.display(), lineno + 1)));
+            };
+            let count: u32 = count.parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("{}:{}: 次数非整数", path.display(), lineno + 1)))?;
+            map.entry(prev.to_string()).or_default().insert(cur.to_string(), count);
+        }
+        Ok(map)
+    }
+
+    /// 把用户 bigram 合并进引擎(供启动时加载)。
+    pub fn set_user_bigram(&mut self, map: std::collections::HashMap<String, std::collections::HashMap<String, u32>>) {
+        self.lexicon.user_bigram = map;
+    }
+
+    /// 把 user_bigram 写盘(`上文 当前词 次数` 行,上文字典序 + 次数降序)。无数据时清空该文件。
+    pub fn save_bigram(&self, path: &Path) -> io::Result<()> {
+        let mut prevs: Vec<_> = self.lexicon.user_bigram.iter().collect();
+        prevs.sort_by(|a, b| a.0.cmp(b.0));
+        let mut out = String::new();
+        for (prev, m) in prevs {
+            let mut curs: Vec<_> = m.iter().collect();
+            curs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+            for (cur, count) in curs {
+                out.push_str(&format!("{prev} {cur} {count}\n"));
+            }
         }
         std::fs::write(path, out)
     }
@@ -155,5 +200,33 @@ mod tests {
         }
         let top = &e.convert(input, 9)[0].text;
         assert_eq!(top, "诗集", "选 3 次应上浮到首位,实得 {top}");
+    }
+
+    #[test]
+    fn bigram_boosts_matching_first_word() {
+        let mut e = Engine::from_str("xue'xi 学习 100\nxue'xi 穴息 5000\nwo'men 我们 9000\n");
+        // 无上文:词频高的"穴息"在前
+        assert_eq!(e.convert_ctx("xuexi", 9, None)[0].text, "穴息");
+        // 记录搭配 我们→学习 5 次后,带上文"我们"时"学习"上浮到首位
+        for _ in 0..5 {
+            e.learn_bigram("我们", "学习");
+        }
+        assert_eq!(e.convert_ctx("xuexi", 9, Some("我们"))[0].text, "学习");
+        // 不同上文(无搭配记录)仍按纯词频
+        assert_eq!(e.convert_ctx("xuexi", 9, Some("他们"))[0].text, "穴息");
+    }
+
+    #[test]
+    fn bigram_survives_roundtrip() {
+        let mut e = Engine::from_str("wo'men 我们 9000\nxue'xi 学习 100\n");
+        e.learn_bigram("我们", "学习");
+        e.learn_bigram("我们", "学习");
+        let dir = std::env::temp_dir().join("glyph_test_bigram");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("bigram.txt");
+        e.save_bigram(&p).unwrap();
+        let loaded = Engine::load_bigram(&p).unwrap();
+        assert_eq!(loaded.get("我们").and_then(|m| m.get("学习")), Some(&2));
+        std::fs::remove_file(&p).ok();
     }
 }
