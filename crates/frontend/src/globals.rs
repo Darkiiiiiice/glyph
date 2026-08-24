@@ -39,13 +39,15 @@ pub struct State {
     // --- 引擎与拼音会话 ---
     pub engine: Engine,
     pub session: Session,
+    /// 用户词频落盘路径(可能不存在;save 时懒建目录)。
+    pub user_freq_path: std::path::PathBuf,
     /// 按键消费一致性表:keycode → press 时是否被 IME 消费;
     /// release 必须跟随 press 的决定,否则应用会收到孤儿 release。
     pub consumed_keys: std::collections::HashMap<u32, bool>,
 }
 
 impl State {
-    pub fn new(engine: Engine) -> Self {
+    pub fn new(engine: Engine, user_freq_path: std::path::PathBuf) -> Self {
         Self {
             im_manager: None,
             vkb_manager: None,
@@ -61,19 +63,20 @@ impl State {
             xkb_state: None,
             engine,
             session: Session::new(),
+            user_freq_path,
             consumed_keys: std::collections::HashMap::new(),
         }
     }
 }
 
 /// 连接 compositor 并枚举 registry,返回连接、事件队列与就绪状态。
-pub fn connect(engine: Engine) -> Result<(Connection, EventQueue<State>, State), String> {
+pub fn connect(engine: Engine, user_freq_path: std::path::PathBuf) -> Result<(Connection, EventQueue<State>, State), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("connect wayland: {e}"))?;
     let display = conn.display();
     let mut eq = conn.new_event_queue();
     let qh = eq.handle();
     let _registry = display.get_registry(&qh, ());
-    let mut state = State::new(engine);
+    let mut state = State::new(engine, user_freq_path);
     eq.roundtrip(&mut state).map_err(|e| format!("registry roundtrip: {e}"))?;
     Ok((conn, eq, state))
 }

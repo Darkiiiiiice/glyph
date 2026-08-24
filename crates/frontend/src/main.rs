@@ -23,17 +23,37 @@ fn lexicon_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/lexicon.txt")
 }
 
+/// 用户词频路径:XDG_DATA_HOME(或 ~/.local/share)/glyph/user_freq.txt
+fn user_freq_path() -> PathBuf {
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            home.join(".local/share")
+        });
+    data_home.join("glyph/user_freq.txt")
+}
+
 fn main() -> ExitCode {
     pretty_env_logger::init();
     let lp = lexicon_path();
-    let engine = match Engine::load(&lp) {
+    let mut engine = match Engine::load(&lp) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("glyph: 词库加载失败 {}: {e}", lp.display());
             return ExitCode::FAILURE;
         }
     };
-    let (_conn, mut eq, mut state) = match globals::connect(engine) {
+    let uf = user_freq_path();
+    match Engine::load_user_freq(&uf) {
+        Ok(map) if !map.is_empty() => {
+            log::info!("用户词频 {} 条 ← {}", map.len(), uf.display());
+            engine.set_user_freq(map);
+        }
+        Ok(_) => {} // 空文件/无数据
+        Err(e) => log::warn!("用户词频加载失败 {}: {e}(忽略,首次运行正常)", uf.display()),
+    }
+    let (_conn, mut eq, mut state) = match globals::connect(engine, uf) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("glyph: {e}");

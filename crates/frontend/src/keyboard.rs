@@ -120,6 +120,14 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
         log::debug!("key {key} sym={sym:#x} shortcut={shortcut} consumed={} commit={:?}", reply.consumed, reply.commit);
         state.consumed_keys.insert(key, reply.consumed);
         if let Some(text) = reply.commit {
+            // 动态调频:记录被选词,并立即落盘(下次启动可恢复)
+            state.engine.learn(&text);
+            if let Some(parent) = state.user_freq_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = state.engine.save_user_freq(&state.user_freq_path) {
+                log::warn!("用户词频落盘失败: {e}");
+            }
             ime::send_commit(state, &text);
         } else if reply.preedit_dirty {
             let preedit = state.session.render_preedit();

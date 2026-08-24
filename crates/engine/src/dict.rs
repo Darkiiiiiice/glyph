@@ -23,6 +23,8 @@ pub struct Lexicon {
     root: Node,
     pub syllables: HashSet<String>,
     pub total_freq: u64,
+    /// 用户词频:整句候选 text → 被选择次数。动态调频层,不混入 trie/total_freq。
+    pub user_freq: HashMap<String, u32>,
 }
 
 impl Lexicon {
@@ -76,7 +78,7 @@ impl Lexicon {
     }
 
     fn empty() -> Self {
-        Self { root: Node::default(), syllables: HashSet::new(), total_freq: 0 }
+        Self { root: Node::default(), syllables: HashSet::new(), total_freq: 0, user_freq: HashMap::new() }
     }
 
     fn insert_line(&mut self, line: &str) -> Result<(), String> {

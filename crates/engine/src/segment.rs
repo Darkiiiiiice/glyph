@@ -63,7 +63,7 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
     }
 
     let mut seen = HashSet::new();
-    dp[len]
+    let cands: Vec<Candidate> = dp[len]
         .iter()
         .map(|(score, words)| Candidate {
             text: words.concat(),
@@ -71,9 +71,28 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
             score: *score,
         })
         .filter(|c| seen.insert(c.text.clone()))
-        .take(limit)
-        .collect()
+        .collect();
+
+    // 用户动态调频:被选过的词加 ln(1+count)·W 权重后重排再截断。
+    // score 字段保持原始对数概率(语义未被污染),只影响候选次序。
+    if lex.user_freq.is_empty() {
+        return cands.into_iter().take(limit).collect();
+    }
+    let mut ranked: Vec<(f64, Candidate)> = cands
+        .into_iter()
+        .map(|c| {
+            let boost = lex.user_freq.get(&c.text).copied().unwrap_or(0);
+            (c.score + (1.0 + boost as f64).ln() * USER_W, c)
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    ranked.into_iter().take(limit).map(|(_, c)| c).collect()
 }
+
+/// 用户调频权重:被选 1 次等效于静态词频自然对数提升 USER_W 倍。
+/// 静态概率差距可用到 ~7(低频词 vs 万频词),选 3 次需 ln(4)·6≈8.3 才能翻越,
+/// 故 USER_W=6 使"选过的低频词 3 次上浮到首位"成立;过高会让单次选择产生跳变。
+const USER_W: f64 = 6.0;
 
 #[cfg(test)]
 mod tests {
@@ -117,5 +136,23 @@ mod tests {
     #[test]
     fn unknown_input_yields_nothing() {
         assert!(convert(&fixture(), "zzz", 9).is_empty());
+    }
+
+    #[test]
+    fn user_freq_boosts_repeatedly_picked_word() {
+        let mut lex = fixture();
+        // 你好 10000 本就第一;选低频"泥蒿"(5)三次,应被顶到首位
+        lex.user_freq.insert("泥蒿".to_string(), 3);
+        let cands = convert(&lex, "nihao", 9);
+        assert_eq!(cands[0].text, "泥蒿", "选过 3 次的低频词应上浮到首位: {cands:?}");
+    }
+
+    #[test]
+    fn single_selection_does_not_dethrone_high_freq() {
+        let mut lex = fixture();
+        // 选 1 次的"泥蒿"不足以压过静态 10000 的"你好"
+        lex.user_freq.insert("泥蒿".to_string(), 1);
+        let cands = convert(&lex, "nihao", 9);
+        assert_eq!(cands[0].text, "你好");
     }
 }
