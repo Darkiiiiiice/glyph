@@ -36,7 +36,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
                 state.ime_active = false;
                 // 放弃进行中的组字,清 preedit 与候选窗
                 if state.session.composing() {
-                    state.session = crate::session::Session::new();
+                    state.session = crate::session::Session::new(state.config.punct_cn);
                     send_preedit(state, "");
                 }
                 crate::popup::hide(state);

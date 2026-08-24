@@ -6,6 +6,7 @@
 //!        → set_preedit_string(拼音+候选) / commit_string(上屏)
 //!   未消费按键 → virtual-keyboard-v1 转发回 compositor(保住全局快捷键)
 
+mod config;
 mod globals;
 mod ime;
 mod keyboard;
@@ -55,7 +56,8 @@ fn main() -> ExitCode {
         Ok(_) => {} // 空文件/无数据
         Err(e) => log::warn!("用户词频加载失败 {}: {e}(忽略,首次运行正常)", uf.display()),
     }
-    let (_conn, mut eq, mut state) = match globals::connect(engine, uf) {
+    let config = config::Config::load();
+    let (_conn, mut eq, mut state) = match globals::connect(engine, uf, config) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("glyph: {e}");

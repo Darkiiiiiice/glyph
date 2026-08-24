@@ -30,8 +30,8 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new() -> Self {
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn: true }
+    pub fn new(punct_cn: bool) -> Self {
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {

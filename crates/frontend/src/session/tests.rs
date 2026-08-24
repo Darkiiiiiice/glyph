@@ -7,7 +7,7 @@ fn fixture() -> Engine {
 #[test]
 fn letters_accumulate_and_commit_on_number() {
     let e = fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     for ch in ['n', 'i', 'h', 'a', 'o'] {
         let r = s.on_keysym(&e, ch as u32);
         assert!(r.consumed && r.preedit_dirty);
@@ -22,7 +22,7 @@ fn letters_accumulate_and_commit_on_number() {
 #[test]
 fn space_commits_first_candidate() {
     let e = fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
     s.on_keysym(&e, 'i' as u32);
     let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_space);
@@ -32,7 +32,7 @@ fn space_commits_first_candidate() {
 #[test]
 fn backspace_edits_buffer_then_forwards_when_empty() {
     let e = fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
     let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_BackSpace);
     assert!(r.consumed && s.buffer.is_empty());
@@ -44,7 +44,7 @@ fn backspace_edits_buffer_then_forwards_when_empty() {
 #[test]
 fn escape_cancels_without_commit() {
     let e = fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
     let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_Escape);
     assert!(r.consumed && r.commit.is_none() && r.preedit_dirty);
@@ -54,7 +54,7 @@ fn escape_cancels_without_commit() {
 #[test]
 fn unrelated_key_forwards_and_drops_buffer() {
     let e = fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     s.on_keysym(&e, 'n' as u32);
     let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_F1);
     assert!(!r.consumed && r.commit.is_none());
@@ -73,7 +73,7 @@ fn paged_fixture() -> Engine {
 fn paging_via_minus_equal() {
     use xkbcommon::xkb::keysyms as K;
     let e = paged_fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     s.on_keysym(&e, 'a' as u32);
     assert_eq!(s.candidates.len(), 12, "候选池应取满 12 个(非 9)");
     assert_eq!(s.page_candidates().len(), 9);
@@ -92,7 +92,7 @@ fn paging_via_minus_equal() {
 fn page_boundaries_and_reset() {
     use xkbcommon::xkb::keysyms as K;
     let e = paged_fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     s.on_keysym(&e, 'a' as u32);
     s.on_keysym(&e, K::KEY_equal);
     assert_eq!(s.page, 1);
@@ -110,7 +110,7 @@ fn page_boundaries_and_reset() {
 fn cn_punct_commit() {
     use xkbcommon::xkb::keysyms as K;
     let e = fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     // 空闲打 `.` → 中文句号
     let r = s.on_keysym(&e, K::KEY_period);
     assert_eq!(r.commit.as_deref(), Some("。"));
@@ -127,7 +127,7 @@ fn cn_punct_commit() {
 fn punct_english_mode_passthrough() {
     use xkbcommon::xkb::keysyms as K;
     let e = fixture();
-    let mut s = Session::new();
+    let mut s = Session::new(true);
     s.toggle_punct(); // 切英文标点
     // 英文模式空闲打 `.`:不在映射生效,转发给应用(不消费)
     let r = s.on_keysym(&e, K::KEY_period);
