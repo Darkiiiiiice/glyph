@@ -35,11 +35,13 @@ pub struct Session {
     /// Shift 单击检测:press 置 down、期间搭配其他键置 used,release 时未 used = 单击切换。
     shift_down: bool,
     shift_used: bool,
+    /// Tab 单字模式:true = 候选窗显示首音节单字(逐字定字);false = 整句候选。
+    char_mode: bool,
 }
 
 impl Session {
     pub fn new(punct_cn: bool) -> Self {
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {
@@ -68,6 +70,7 @@ impl Session {
         }
         match sym {
             s if (K::KEY_a..=K::KEY_z).contains(&s) => {
+                self.char_mode = false; // 单字模式下按字母:退出单字、字母正常入缓冲
                 self.buffer.push(char::from_u32(s).unwrap());
                 self.refresh(engine);
                 Reply { consumed: true, preedit_dirty: true, ..Default::default() }
@@ -94,6 +97,12 @@ impl Session {
                     Reply { consumed: true, commit: Some(text), preedit_dirty: true, ..Default::default() }
                 }
             },
+            // Tab 切单字模式:候选窗在整句与首音节单字间切换(逐字定字)。
+            K::KEY_Tab if self.composing() => {
+                self.char_mode = !self.char_mode;
+                self.refresh(engine);
+                Reply { consumed: true, preedit_dirty: true, ..Default::default() }
+            }
             K::KEY_BackSpace if self.composing() => {
                 self.buffer.pop();
                 self.refresh(engine);
@@ -172,8 +181,13 @@ impl Session {
     }
 
     fn refresh(&mut self, engine: &Engine) {
-        self.candidates =
-            if self.buffer.is_empty() { Vec::new() } else { engine.convert(&self.buffer, POOL) };
+        self.candidates = if self.buffer.is_empty() {
+            Vec::new()
+        } else if self.char_mode {
+            engine.first_syllable_chars(&self.buffer, POOL)
+        } else {
+            engine.convert(&self.buffer, POOL)
+        };
         self.page = 0;
     }
 
@@ -181,11 +195,13 @@ impl Session {
         self.buffer.clear();
         self.candidates.clear();
         self.page = 0;
+        self.char_mode = false;
     }
 
     /// 选中候选:上屏 text;若候选只消耗前缀拼音(首词/逐字选择),截掉已消耗
     /// 部分、剩余拼音重新转换继续组字;否则(整句/无剩余)清空。
     fn pick(&mut self, engine: &Engine, text: String, consumed: usize) -> Reply {
+        self.char_mode = false; // 选中即退出单字模式,剩余拼音回整句续打
         let total = self.buffer.bytes().filter(|&b| b != b'\'').count();
         if consumed >= total {
             self.clear();

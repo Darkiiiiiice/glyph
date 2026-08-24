@@ -37,6 +37,11 @@ impl Engine {
         segment::convert(&self.lexicon, input, limit)
     }
 
+    /// Tab 单字模式:第一音节的全部单字候选(见 segment::first_syllable_chars)。
+    pub fn first_syllable_chars(&self, input: &str, limit: usize) -> Vec<Candidate> {
+        segment::first_syllable_chars(&self.lexicon, input, limit)
+    }
+
     /// 记录一个被选择的候选文本：次数 +1，此后 convert 排序会上浮它。
     pub fn learn(&mut self, text: &str) {
         if let Some(h) = self.lexicon.user_freq.get_mut(text) {

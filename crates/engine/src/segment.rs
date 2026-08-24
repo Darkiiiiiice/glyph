@@ -40,14 +40,9 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
 
     // 词边按终点归桶：incoming[end] = [(起点, 词, 词频)]
     let mut incoming: Vec<Vec<(usize, &str, u32)>> = vec![Vec::new(); len + 1];
-    // 首词候选(逐字/逐词选择):位置 0 出发、未覆盖全输入的词边,记下消耗字节数。
-    let mut prefix: Vec<(usize, &str, u32)> = Vec::new();
     lex.for_each_word_edge(&lattice, |start, end, words| {
         for (word, freq) in words.iter().take(EDGE_WORD_CAP) {
             incoming[end].push((start, word.as_str(), *freq));
-            if start == 0 && end < len {
-                prefix.push((end, word.as_str(), *freq));
-            }
         }
     });
 
@@ -94,33 +89,59 @@ pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
         }
     }
 
-    // 首词候选并入(consumed<len 标记部分消耗,供逐字/逐词选择)。
-    for (end, word, freq) in prefix {
-        cands.push(Candidate {
-            text: word.to_string(),
-            words: vec![word.to_string()],
-            score: (freq as f64 / total).ln(),
-            consumed: end,
-        });
-    }
-
-    // 统一去重:保留先出现者(DP 全拼在前,优先于同文本的简拼/首词)。
+    // 统一去重:保留先出现者(DP 全拼在前,优先于同文本的简拼)。
     let mut seen = HashSet::new();
     cands.retain(|c| seen.insert(c.text.clone()));
 
-    // 排序:静态 score + 用户调频增量(无用户数据时增量 ln(1)=0)。分两组:
-    // 整句候选(消耗全部拼音)在前——多字输入主选整句;首词候选(部分消耗)
-    // 在后附加,供逐字/逐词选择。score 字段保持原始对数概率不被污染,只影响次序。
-    let (mut full, mut rest): (Vec<(f64, Candidate)>, Vec<(f64, Candidate)>) = cands
+    // 排序:静态 score + 用户调频增量(无用户数据时增量 ln(1)=0)。
+    // score 字段保持原始对数概率不被污染,只影响次序。
+    let mut ranked: Vec<(f64, Candidate)> = cands
         .into_iter()
         .map(|c| {
             let boost = lex.user_freq.get(&c.text).copied().unwrap_or(0);
             (c.score + (1.0 + boost as f64).ln() * USER_W, c)
         })
-        .partition(|(_, c)| c.consumed >= len);
-    full.sort_by(|a, b| b.0.total_cmp(&a.0));
-    rest.sort_by(|a, b| b.0.total_cmp(&a.0));
-    full.into_iter().chain(rest).take(limit).map(|(_, c)| c).collect()
+        .collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    ranked.into_iter().take(limit).map(|(_, c)| c).collect()
+}
+
+/// Tab 单字模式:第一音节的全部单字候选(逐字定字)。
+/// 覆盖所有合法首音节切分(xian→xi/xian),只收单字;consumed=该首音节字节数,
+/// 选中后截掉续打剩余拼音。排序同 convert(静态词频 + 用户调频)。
+pub fn first_syllable_chars(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
+    let lattice = syllable::build_lattice(input, &lex.syllables);
+    if lattice.text.is_empty() {
+        return Vec::new();
+    }
+    let total = lex.total_freq as f64;
+    let mut seen = HashSet::new();
+    let mut cands: Vec<Candidate> = Vec::new();
+    lex.for_each_word_edge(&lattice, |start, end, words| {
+        if start != 0 {
+            return; // 只要第一音节(位置 0 出发的边)
+        }
+        for (word, freq) in words.iter() {
+            // 只收单字;同一字若出现在多个首音节切分下,按文本去重
+            if word.chars().count() == 1 && seen.insert(word.clone()) {
+                cands.push(Candidate {
+                    text: word.clone(),
+                    words: vec![word.clone()],
+                    score: (*freq as f64 / total).ln(),
+                    consumed: end,
+                });
+            }
+        }
+    });
+    let mut ranked: Vec<(f64, Candidate)> = cands
+        .into_iter()
+        .map(|c| {
+            let boost = lex.user_freq.get(&c.text).copied().unwrap_or(0);
+            (c.score + (1.0 + boost as f64).ln() * USER_W, c)
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    ranked.into_iter().take(limit).map(|(_, c)| c).collect()
 }
 
 /// 用户调频权重:被选 1 次等效于静态词频自然对数提升 USER_W 倍。
@@ -173,18 +194,27 @@ mod tests {
     }
 
     #[test]
-    fn prefix_candidates_enable_char_by_char() {
-        let cands = convert(&fixture(), "nihao", 90);
-        // 整句候选消耗全部拼音(5 字节 nihao)。
-        let full = cands.iter().find(|c| c.text == "你好").unwrap();
-        assert_eq!(full.consumed, 5, "整句候选消耗全部拼音");
-        // 首词候选"你"只消耗 ni(2 字节),供逐字选择。
-        let zi = cands.iter().find(|c| c.text == "你").unwrap();
-        assert_eq!(zi.consumed, 2, "首词候选只消耗第一音节");
-        // 整句排在首词前(多字输入主选整句)。
-        let pos_full = cands.iter().position(|c| c.text == "你好").unwrap();
-        let pos_zi = cands.iter().position(|c| c.text == "你").unwrap();
-        assert!(pos_full < pos_zi, "整句候选应排在首词前: {cands:?}");
+    fn first_syllable_chars_covers_ambiguous_split() {
+        // xian 的首音节有歧义(xi|an 或 xian):两种切分的单字都应在候选。
+        let lex = Lexicon::from_lines(
+            "xi 西 900\nxi 细 800\nxian 先 700\nxian 线 600\nan 安 500\nxi'an 西安 8000\n",
+        );
+        let cands = first_syllable_chars(&lex, "xian", 90);
+        assert!(cands.iter().all(|c| c.text.chars().count() == 1), "只含单字: {cands:?}");
+        // xi 切分的单字(consumed=2)与 xian 切分的单字(consumed=4)都在
+        assert!(cands.iter().any(|c| c.text == "西" && c.consumed == 2), "xi 的字: {cands:?}");
+        assert!(cands.iter().any(|c| c.text == "先" && c.consumed == 4), "xian 的字: {cands:?}");
+        // 词(西安)不是单字,不应出现
+        assert!(!cands.iter().any(|c| c.text == "西安"));
+    }
+
+    #[test]
+    fn first_syllable_chars_apply_user_freq_boost() {
+        // 单字模式同样吃用户调频:选过 3 次的低频字应上浮到首位。
+        let mut lex = Lexicon::from_lines("xuan 选 900\nxuan 宣 8\nze 泽 500\n");
+        lex.user_freq.insert("宣".to_string(), 3);
+        let cands = first_syllable_chars(&lex, "xuanze", 90);
+        assert_eq!(cands[0].text, "宣", "选过 3 次的低频字应上浮: {cands:?}");
     }
 
     #[test]

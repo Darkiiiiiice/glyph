@@ -225,24 +225,59 @@ fn page_keys_at_boundary_dont_dismiss() {
 }
 
 #[test]
-fn pick_prefix_keeps_remaining_pinyin() {
+fn tab_char_mode_pick_char_keeps_remaining_pinyin() {
+    use xkbcommon::xkb::keysyms as K;
     let e = fixture();
     let mut s = Session::new(true);
     for ch in "nihao".chars() {
         s.on_keysym(&e, ch as u32);
     }
     assert_eq!(s.buffer, "nihao");
-    // 首词候选"你"只消耗 ni(2 字节)。
+    // Tab 进单字模式:候选变首音节 ni 的单字
+    s.on_keysym(&e, K::KEY_Tab);
+    assert!(s.char_mode, "Tab 应进单字模式");
+    assert!(s.candidates.iter().all(|c| c.text.chars().count() == 1), "单字模式候选全是单字");
     let (text, consumed) = s
         .candidates
         .iter()
         .find(|c| c.text == "你" && c.consumed == 2)
         .map(|c| (c.text.clone(), c.consumed))
-        .expect("应有首词候选\"你\"");
+        .expect("单字模式应有\"你\"");
+    // 选"你":上屏 + 剩余 hao 续打 + 回整句模式
     let reply = s.pick(&e, text, consumed);
     assert_eq!(reply.commit.as_deref(), Some("你"));
-    assert_eq!(s.buffer, "hao", "选中首词后剩余拼音继续组字");
+    assert_eq!(s.buffer, "hao", "选字后剩余拼音继续组字");
+    assert!(!s.char_mode, "选字后回整句模式");
     assert!(s.candidates.iter().any(|c| c.text == "好"), "剩余 hao 应转出\"好\"");
+}
+
+#[test]
+fn tab_toggles_back_to_sentence_mode() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    for ch in "nihao".chars() {
+        s.on_keysym(&e, ch as u32);
+    }
+    s.on_keysym(&e, K::KEY_Tab);
+    assert!(s.char_mode);
+    // 再按 Tab 回整句模式
+    s.on_keysym(&e, K::KEY_Tab);
+    assert!(!s.char_mode);
+    assert!(s.candidates.iter().any(|c| c.text == "你好"), "回整句后候选恢复整句");
+}
+
+#[test]
+fn escape_clears_char_mode() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    s.on_keysym(&e, 'n' as u32);
+    s.on_keysym(&e, 'i' as u32);
+    s.on_keysym(&e, K::KEY_Tab);
+    assert!(s.char_mode);
+    s.on_keysym(&e, K::KEY_Escape);
+    assert!(!s.composing() && !s.char_mode, "Esc 取消并退出单字模式");
 }
 
 #[test]
