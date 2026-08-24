@@ -91,16 +91,10 @@ impl Session {
         }
     }
 
-    /// 渲染 preedit 文本:`拼音 + 编号候选`,光标由 ime 层置于末尾。
+    /// 渲染 preedit 文本:仅拼音。候选由 M2 独立候选窗(popup)显示,
+    /// 不再内联进 preedit——否则会出现横向 preedit 候选 + 竖向候选窗两套。
     pub fn render_preedit(&self) -> String {
-        if self.buffer.is_empty() {
-            return String::new();
-        }
-        let mut s = self.buffer.clone();
-        for (i, c) in self.candidates.iter().take(PAGE).enumerate() {
-            s.push_str(&format!(" {}.{}", i + 1, c.text));
-        }
-        s
+        self.buffer.clone()
     }
 
     fn refresh(&mut self, engine: &Engine) {
@@ -131,7 +125,7 @@ mod tests {
             assert!(r.consumed && r.preedit_dirty);
         }
         assert_eq!(s.buffer, "nihao");
-        assert!(s.render_preedit().contains("1.你好"));
+        assert_eq!(s.render_preedit(), "nihao", "preedit 只显拼音,候选交给候选窗");
         let r = s.on_keysym(&e, xkbcommon::xkb::keysyms::KEY_1);
         assert_eq!(r.commit.as_deref(), Some("你好"));
         assert!(s.buffer.is_empty());
