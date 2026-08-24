@@ -147,6 +147,19 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
             forward_key(state, time, key, st_raw);
         }
     } else {
+        // 送 session:检测 Shift 单击(press 后 release 无其他键 = 切换中/英)。
+        let sym = state
+            .xkb_state
+            .as_ref()
+            .map(|xs| u32::from(xs.key_get_one_sym(xkb::Keycode::new(key + EVDEV_TO_XKB))))
+            .unwrap_or(0);
+        if state.session.on_release(sym) {
+            // 中/英模式切换:刷新 preedit(英文=空)并隐藏候选窗。
+            let preedit = state.session.render_preedit();
+            ime::send_preedit(state, &preedit);
+            crate::popup::hide(state);
+            log::info!("输入模式: {}", if state.session.english { "英文" } else { "中文" });
+        }
         // release 跟随 press 的消费决定
         match state.consumed_keys.remove(&key) {
             Some(false) => forward_key(state, time, key, st_raw),

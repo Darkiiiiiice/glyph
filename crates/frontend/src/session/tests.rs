@@ -163,3 +163,33 @@ fn modifier_keys_do_not_disturb_composing() {
     assert!(!r.consumed && r.commit.is_none());
     assert!(s.composing() && s.buffer == "ni", "Shift 不应打断组字: buffer={}", s.buffer);
 }
+#[test]
+fn shift_click_toggles_english() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    // 单击 Shift → 英文
+    s.on_keysym(&e, K::KEY_Shift_L);
+    assert!(s.on_release(K::KEY_Shift_L));
+    assert!(s.english);
+    // 英文模式:字母转发(不消费、不上屏、不进拼音)
+    let r = s.on_keysym(&e, 'n' as u32);
+    assert!(!r.consumed && r.commit.is_none() && s.buffer.is_empty());
+    // 单击 Shift → 切回中文
+    s.on_keysym(&e, K::KEY_Shift_L);
+    assert!(s.on_release(K::KEY_Shift_L));
+    assert!(!s.english);
+    // 中文模式:字母进拼音
+    assert!(s.on_keysym(&e, 'n' as u32).consumed);
+}
+
+#[test]
+fn shift_chord_is_not_click() {
+    use xkbcommon::xkb::keysyms as K;
+    let e = fixture();
+    let mut s = Session::new(true);
+    s.on_keysym(&e, K::KEY_Shift_L);
+    s.on_keysym(&e, 'n' as u32); // Shift+n:搭配了其他键
+    assert!(!s.on_release(K::KEY_Shift_L), "Shift+字母不是单击,不应切换");
+    assert!(!s.english);
+}

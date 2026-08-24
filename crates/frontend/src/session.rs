@@ -30,11 +30,16 @@ pub struct Session {
     /// 双/单引号配对状态:true = 下次出闭引号。跨句保留(引号配对是全局输入状态)。
     dquote_open: bool,
     squote_open: bool,
+    /// 英文输入模式(单击 Shift 切换):所有键转发,应用直接收原始键,等同无输入法。
+    pub english: bool,
+    /// Shift 单击检测:press 置 down、期间搭配其他键置 used,release 时未 used = 单击切换。
+    shift_down: bool,
+    shift_used: bool,
 }
 
 impl Session {
     pub fn new(punct_cn: bool) -> Self {
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {
@@ -49,6 +54,18 @@ impl Session {
     /// keysym 路由。sym 为 xkb keysym(已含 shift 等修饰后的结果)。
     pub fn on_keysym(&mut self, engine: &Engine, sym: u32) -> Reply {
         use xkbcommon::xkb::keysyms as K;
+        // Shift 单击检测:press 标记;期间搭配其他键则不算单击(release 时判定,见 on_release)。
+        if sym == K::KEY_Shift_L || sym == K::KEY_Shift_R {
+            self.shift_down = true;
+            self.shift_used = false;
+        } else if self.shift_down {
+            self.shift_used = true;
+        }
+        // 英文模式:所有键转发(应用直接收原始键,等同无输入法);Shift 上面已标记,
+        // 用于单击切回中文。
+        if self.english {
+            return Reply::default();
+        }
         match sym {
             s if (K::KEY_a..=K::KEY_z).contains(&s) => {
                 self.buffer.push(char::from_u32(s).unwrap());
@@ -122,6 +139,24 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// 按键释放:检测 Shift 单击(press 后未搭配其他键)切换中/英文模式。
+    /// 返回是否发生了模式切换(调用方据此刷新 preedit/候选窗)。
+    pub fn on_release(&mut self, sym: u32) -> bool {
+        use xkbcommon::xkb::keysyms as K;
+        if (sym == K::KEY_Shift_L || sym == K::KEY_Shift_R) && self.shift_down {
+            if !self.shift_used {
+                self.english = !self.english;
+                if self.english {
+                    self.clear(); // 切入英文:丢弃未上屏的拼音缓冲
+                }
+                self.shift_down = false;
+                return true;
+            }
+            self.shift_down = false;
+        }
+        false
     }
 
     /// 渲染 preedit 文本:仅拼音。候选由 M2 独立候选窗(popup)显示,
