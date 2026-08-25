@@ -5,6 +5,9 @@
 //! - kMandarin_8105.txt    pinyin-data，行格式 `U+4E00: yī  # 一`，提供单字最常用读音；
 //! - phrase-pinyin.txt     phrase-pinyin-data，行格式 `重庆: chóng qìng`，提供词语级读音。
 //!
+//! 可选数据源(GPL-3.0,不入 git,个人本地使用):data/raw/rime-{ice,frost}/*.dict.yaml
+//! 存在时自动合并进词库(见 rime_merge.rs 头注),缺失则静默跳过。
+//!
 //! 读音策略：词语优先查词语级数据（多音字正确，如 重庆→chong'qing），
 //! 查不到再逐字查 kMandarin（单音字场景）。含未收录字符的词（夹 ASCII 等）跳过。
 //! 输出行格式：`pin'yin 词 词频`（音节间用 ' 连接，声调记号已剥除，ü 记作 v）。
@@ -15,6 +18,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+mod rime_merge;
 
 fn main() -> ExitCode {
     let mut raw = PathBuf::from("data/raw");
@@ -37,6 +42,18 @@ fn main() -> ExitCode {
     match run(&raw, &out) {
         Ok((written, skipped)) => {
             println!("完成: {written} 词条 -> {}, {skipped} 条跳过", out.display());
+            match rime_merge::merge(&raw, &out) {
+                Ok(Some(stats)) => {
+                    for (file, kept, skip) in stats {
+                        println!("rime 合并 {file}: 新增 {kept}, 跳过 {skip}");
+                    }
+                }
+                Ok(None) => println!("rime 词库不存在,跳过合并"),
+                Err(e) => {
+                    eprintln!("rime 合并失败: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
             ExitCode::SUCCESS
         }
         Err(err) => {

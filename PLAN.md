@@ -14,7 +14,7 @@
 - 全 Rust，零 C 依赖，不碰 GTK/Qt。
 - 全项目 **<10k 行**，每文件 **<300 行**。
 - Wayland-only，不做 X11 回退。
-- 数据源全部使用 MIT 许可的开源数据。
+- 数据源全部使用 MIT 许可的开源数据。**例外**(2026-08-24 用户决定):rime-ice/rime-frost 词库为 GPL-3.0,仅作本地可选数据源(data/raw/ 已 gitignore,永不入库/分发);若将来分发 lexicon.txt 需重新评估此例外。
 
 ## 技术决策
 
@@ -25,7 +25,7 @@
 | 协议 | im-v2 收键盘焦点与 preedit；virtual-keyboard-v1 注入上屏；layer-shell 候选窗 |
 | 渲染 | wl_shm 软件渲染 + fontdue 绘字 |
 | 引擎参照 | librime 源码（拼写运算、DAG 最短路切分、n-gram 排序）——理解后用 Rust 重新表达 |
-| 数据源 | 音节表 ~410（自整理，pinyin-data 交叉校验）；汉字→拼音 mozillazg/pinyin-data (MIT)；词表+词频 jieba 词典 (MIT)；M0 用 5 万常用词 |
+| 数据源 | 音节表 ~410（自整理，pinyin-data 交叉校验）；汉字→拼音 mozillazg/pinyin-data (MIT)；词表+词频 jieba 词典 (MIT)；**可选合并** rime-ice(iDvel 上游)+ rime-frost 词库(GPL-3.0,本地) |
 | 终端 TUI | 延后，engine 预留复用 |
 
 ## 里程碑
@@ -74,6 +74,10 @@ im-v2 连 niri → 键盘 grab → preedit 发进应用 → **im-v2 commit_strin
 **验收**:反复"我们→学习"后,打"我们"再打 xuexi,"学习"提前(随使用积累生效)。
 
 **调校结论**(2026-08-24,`BIGRAM_W=6` 不变)。真实词库 34,065 个同音词组的静态 gap 分布:p50=1.39(4x)、p90=4.20(67x)、p99=6.78(884x);W=6 下 1 次搭配翻 p90、3 次翻 ~4000x,响应足够。交替竞争 race(模拟+引擎契约测试双验证):窄 gap 对前 ~W/gap 轮呈"最近所选居首"(翻转限于相邻名次,两词始终前二可见,等价 recency 镜像),之后 Δboost=W·ln(1+1/n) 衰减到 gap 以下,静态先验正确弃权;宽 gap 对交替使用**永不翻盘**,须独占使用——上下文无区分度时 bigram 不干预;翻盘后恢复同样便宜:1 次反向选择即刻夺回(坍缩×3 翻盘后探索×1,Δboost=6·ln2=4.16<gap 6.78,静态锚主场优势),再翻需追到 6:1——误翻成本极低,进一步支持 W=6。否决替代方案:min-count 门槛(与 USER_W 一次即学的既定手感不一致,且双方 count 过门槛后 jitter 原样保留)、count²/total 概率归一(高频上文稀释死锁:`我们`积累 2000 条搭配后新窄 gap 习惯需 ~14 次才学会,比装饰性 jitter 更糟)。契约测试:`bigram_narrow_gap_flips_once_and_recovers`、`bigram_wide_gap_requires_dominant_usage`(segment.rs)。
+
+### 词库增强:合并 rime-ice + rime-frost ✅(2026-08-24)
+glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加进 lexicon.txt,词库 343,582 → **1,392,747** 条(+105 万)。规则:已有 (词,拼音) 保留 jieba 词频;带权重源(ice/frost base、frost ext、ice 8105)按 ln 空间 p50/p90 分位锚定映射到现有词频带并 clamp;平权源常数(ext=30、tencent=5、生僻字=3);ice/tencent 98 万条不并(frost 已是其精选);frost word/chengyu 是双拼码表、corrections 容错注音,均不可用。校验:词全 CJK + 音节在既有音节表。
+**效果**(41 个常见输入对比):榜首 41/41 不变;top-9 换血 8.4%,几乎全是"字符拼合垃圾→真词"(旧 kexue 尾部 可学/可血/可雪 换成 咳血 等)。机制:total_freq 膨胀 Δ=ln(T1/T0)=1.02,单词边全体 -1.02 对数分、双段拼合路径 -2.03,拼合垃圾系统性下沉;user_freq/bigram boost 相对增强 ~1 对数分。常数校准合理(ext=30 压过碎片但压不过既有真词)。成本:加载 ~3.5s(release)、daemon RSS ~1.3GB(trie 每节点 HashMap 所致,紧凑化为后续优化项)。
 
 ### M4 毕业项目
 niri 侧协议修复 + 上游 PR。输入法 + 合成器两端全掌握，是本项目独有的学习场景。
