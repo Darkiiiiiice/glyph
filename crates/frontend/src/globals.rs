@@ -32,7 +32,7 @@ pub struct State {
     /// compositor 报告的文本光标矩形(相对焦点 surface)。
     pub cursor_rect: Option<(i32, i32, i32, i32)>,
     /// 候选窗渲染器(M2,lazy 加载 CJK 字体)。
-    pub renderer: Option<crate::render::Renderer>,
+    pub renderer: Option<glyph_frontend::render::Renderer>,
     // --- im-v2 会话 ---
     pub ime: Option<ZwpInputMethodV2>,
     pub ime_active: bool,
@@ -51,7 +51,7 @@ pub struct State {
     pub engine: Engine,
     pub session: Session,
     /// 用户配置:候选窗外观 style 供 popup 渲染,punct_cn 决定 session 标点初值。
-    pub config: crate::config::Config,
+    pub config: glyph_frontend::config::Config,
     /// 用户词频落盘路径(可能不存在;save 时懒建目录)。
     pub user_freq_path: std::path::PathBuf,
     /// 按键消费一致性表:keycode → press 时是否被 IME 消费;
@@ -64,7 +64,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(engine: Engine, user_freq_path: std::path::PathBuf, config: crate::config::Config) -> Self {
+    pub fn new(engine: Engine, user_freq_path: std::path::PathBuf, config: glyph_frontend::config::Config) -> Self {
         Self {
             im_manager: None,
             vkb_manager: None,
@@ -96,7 +96,7 @@ impl State {
 }
 
 /// 连接 compositor 并枚举 registry,返回连接、事件队列与就绪状态。
-pub fn connect(engine: Engine, user_freq_path: std::path::PathBuf, config: crate::config::Config) -> Result<(Connection, EventQueue<State>, State), String> {
+pub fn connect(engine: Engine, user_freq_path: std::path::PathBuf, config: glyph_frontend::config::Config) -> Result<(Connection, EventQueue<State>, State), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("connect wayland: {e}"))?;
     let display = conn.display();
     let mut eq = conn.new_event_queue();

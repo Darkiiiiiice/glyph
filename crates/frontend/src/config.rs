@@ -41,6 +41,14 @@ impl Config {
                 continue;
             }
             let Some((k, v)) = line.split_once('=') else { continue };
+            // 行尾注释:首个"空白 + #"起丢弃;值开头的 #RRGGBB 无前置空白,不受影响。
+            let v = v.trim_start();
+            let cut = v
+                .char_indices()
+                .skip(1)
+                .find(|&(i, _)| v.as_bytes()[i] == b'#' && v.as_bytes()[i - 1].is_ascii_whitespace())
+                .map(|(i, _)| i);
+            let v = cut.map_or(v, |i| v[..i].trim_end());
             match k.trim() {
                 "font_size" => {
                     if let Ok(x) = v.trim().parse() {
@@ -81,6 +89,20 @@ fn set(field: &mut u32, v: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trailing_comment_is_stripped() {
+        // 值后的"空白 + #"是注释;#RRGGBB 前缀不是注释。用临时 XDG_CONFIG_HOME 跑完整 load。
+        let xdg = std::env::temp_dir().join(format!("glyph-test-xdg-{}", std::process::id()));
+        std::fs::create_dir_all(xdg.join("glyph")).unwrap();
+        std::fs::write(xdg.join("glyph/config.conf"), "bg = ff2a6d   # 霓虹粉\nfg = #00f0ff\n").unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        let cfg = super::Config::load();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&xdg);
+        assert_eq!(cfg.style.bg, 0xffff2a6d, "行尾注释应被剥离");
+        assert_eq!(cfg.style.fg, 0xff00f0ff, "# 前缀颜色应保留");
+    }
+
     #[test]
     fn hex_parsing() {
         assert_eq!(super::Config::default().style.bg, 0xee2b2b2b);

@@ -6,12 +6,10 @@
 //!        → set_preedit_string(拼音+候选) / commit_string(上屏)
 //!   未消费按键 → virtual-keyboard-v1 转发回 compositor(保住全局快捷键)
 
-mod config;
 mod globals;
 mod ime;
 mod keyboard;
 mod popup;
-mod render;
 mod repeat;
 mod session;
 
@@ -67,7 +65,7 @@ fn main() -> ExitCode {
         Ok(_) => {}
         Err(e) => log::warn!("用户 bigram 加载失败 {}: {e}(忽略,首次运行正常)", bp.display()),
     }
-    let config = config::Config::load();
+    let config = glyph_frontend::config::Config::load();
     let (_conn, mut eq, mut state) = match globals::connect(engine, uf, config) {
         Ok(t) => t,
         Err(e) => {

@@ -64,7 +64,7 @@ impl Dispatch<WlSurface, ()> for State {
 /// 候选或拼音皆空时隐藏。显示尺寸随候选数自适应。
 pub fn redraw(state: &mut State, qh: &QueueHandle<State>) {
     if state.renderer.is_none() {
-        state.renderer = crate::render::Renderer::load(state.config.style.clone());
+        state.renderer = glyph_frontend::render::Renderer::load(state.config.style.clone());
     }
     let pinyin = state.session.buffer.clone();
     let cands: Vec<String> = state.session.page_candidates().iter().map(|c| c.text.clone()).collect();
