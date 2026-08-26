@@ -57,6 +57,10 @@ pub struct State {
     /// 按键消费一致性表:keycode → press 时是否被 IME 消费;
     /// release 必须跟随 press 的决定,否则应用会收到孤儿 release。
     pub consumed_keys: std::collections::HashMap<u32, bool>,
+    /// 长按重复:compositor 报告的 (rate 次/秒, delay ms);rate==0 = 禁用。
+    pub repeat_info: Option<(u32, u32)>,
+    /// 当前按住的可重复键:主循环 poll 超时到点后由 repeat::tick 重放 press。
+    pub held: Option<crate::repeat::HeldKey>,
 }
 
 impl State {
@@ -81,10 +85,12 @@ impl State {
             pending_modifiers: None,
             xkb_state: None,
             engine,
-            session: Session::new(config.punct_cn),
+            session: Session::new(config.punct_cn, config.page_size),
             config,
             user_freq_path,
             consumed_keys: std::collections::HashMap::new(),
+            repeat_info: None,
+            held: None,
         }
     }
 }

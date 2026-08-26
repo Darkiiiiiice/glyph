@@ -23,4 +23,4 @@ pretty_env_logger = "0.5"
 wayland-protocols-wlr = "0.3.12"
 wayland-scanner = "0.31"
 fontdue = "0.9.4"
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "event", "time"] }

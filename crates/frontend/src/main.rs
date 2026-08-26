@@ -12,6 +12,7 @@ mod ime;
 mod keyboard;
 mod popup;
 mod render;
+mod repeat;
 mod session;
 
 use std::path::PathBuf;
@@ -101,14 +102,43 @@ fn main() -> ExitCode {
     state.ime = Some(ime);
     println!("glyph: 已连接 niri,等待输入焦点…");
 
+    // 事件循环:wayland fd + repeat 定时(poll 超时即下次长按重复到点)。
+    // 每轮顺序:派发已读事件 → 到点 repeat 重放 → 刷出站请求 → poll 等下一批。
+    use std::os::fd::AsFd;
+    use rustix::event::{poll, PollFd, PollFlags};
     loop {
-        if let Err(e) = eq.blocking_dispatch(&mut state) {
+        if let Err(e) = eq.dispatch_pending(&mut state) {
             eprintln!("glyph: 事件循环错误: {e}");
             return ExitCode::FAILURE;
         }
         if state.ime.is_none() {
             eprintln!("glyph: 输入法对象被 compositor 撤回,退出");
             return ExitCode::FAILURE;
+        }
+        // rustix 1.x 的 poll 超时是 Option<&Timespec>(None = 无限)。
+        let timeout = repeat::tick(&mut state, &qh).map(|d| {
+            let ms = d.as_millis().clamp(1, i64::MAX as u128 / 1_000_000) as i64;
+            rustix::time::Timespec { tv_sec: ms / 1000, tv_nsec: (ms % 1000) * 1_000_000 }
+        });
+        if let Err(e) = eq.flush() {
+            eprintln!("glyph: 连接写失败: {e}");
+            return ExitCode::FAILURE;
+        }
+        let Some(guard) = eq.prepare_read() else { continue }; // 竞态新事件,回循环头派发
+        let mut fds = [PollFd::from_borrowed_fd(_conn.as_fd(), PollFlags::IN)];
+        match poll(&mut fds, timeout.as_ref()) {
+            Ok(n) if n > 0 && fds[0].revents().contains(PollFlags::IN) => {
+                if let Err(e) = guard.read() {
+                    eprintln!("glyph: 事件读取失败: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            Ok(_) => drop(guard),          // 超时:repeat 在循环头处理
+            Err(rustix::io::Errno::INTR) => drop(guard),
+            Err(e) => {
+                eprintln!("glyph: poll 失败: {e}");
+                return ExitCode::FAILURE;
+            }
         }
     }
 }

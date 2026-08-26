@@ -12,11 +12,13 @@ pub struct Config {
     pub style: Style,
     /// 默认中/英文标点模式(true=中文标点)。
     pub punct_cn: bool,
+    /// 每页候选数(数字键 1-9 直选,>9 时超出数字键范围的只能翻页选中)。
+    pub page_size: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { style: Style::default(), punct_cn: true }
+        Self { style: Style::default(), punct_cn: true, page_size: 9 }
     }
 }
 
@@ -46,10 +48,22 @@ impl Config {
                     }
                 }
                 "punct_cn" => cfg.punct_cn = matches!(v.trim(), "true" | "1" | "yes"),
+                "page_size" => {
+                    if let Ok(x) = v.trim().parse::<usize>() {
+                        cfg.page_size = x.clamp(1, 20);
+                    }
+                }
+                "radius" => {
+                    if let Ok(x) = v.trim().parse() {
+                        cfg.style.radius = x;
+                    }
+                }
+                "font_path" => cfg.style.font_path = Some(v.trim().to_string()),
                 "bg" => set(&mut cfg.style.bg, v),
                 "fg" => set(&mut cfg.style.fg, v),
                 "pinyin_fg" => set(&mut cfg.style.pinyin_fg, v),
                 "hilite_bg" => set(&mut cfg.style.hilite_bg, v),
+                "hilite_fg" => set(&mut cfg.style.hilite_fg, v),
                 other => log::warn!("glyph 配置:未知键 {other}"),
             }
         }

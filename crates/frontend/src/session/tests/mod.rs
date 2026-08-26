@@ -10,7 +10,7 @@ fn fixture() -> Engine {
 #[test]
 fn letters_accumulate_and_commit_on_number() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     for ch in ['n', 'i', 'h', 'a', 'o'] {
         let r = s.on_keysym(&mut e, ch as u32);
         assert!(r.consumed && r.preedit_dirty);
@@ -25,7 +25,7 @@ fn letters_accumulate_and_commit_on_number() {
 #[test]
 fn space_commits_first_candidate() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     s.on_keysym(&mut e, 'i' as u32);
     let r = s.on_keysym(&mut e, xkbcommon::xkb::keysyms::KEY_space);
@@ -35,7 +35,7 @@ fn space_commits_first_candidate() {
 #[test]
 fn backspace_edits_buffer_then_forwards_when_empty() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     let r = s.on_keysym(&mut e, xkbcommon::xkb::keysyms::KEY_BackSpace);
     assert!(r.consumed && s.buffer.is_empty());
@@ -47,7 +47,7 @@ fn backspace_edits_buffer_then_forwards_when_empty() {
 #[test]
 fn escape_cancels_without_commit() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     let r = s.on_keysym(&mut e, xkbcommon::xkb::keysyms::KEY_Escape);
     assert!(r.consumed && r.commit.is_none() && r.preedit_dirty);
@@ -57,7 +57,7 @@ fn escape_cancels_without_commit() {
 #[test]
 fn unrelated_key_forwards_and_drops_buffer() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     let r = s.on_keysym(&mut e, xkbcommon::xkb::keysyms::KEY_F1);
     assert!(!r.consumed, "键仍转发给应用");
@@ -76,7 +76,7 @@ fn paged_fixture() -> Engine {
 #[test]
 fn paging_via_minus_equal() {
     let mut e = paged_fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'a' as u32);
     assert_eq!(s.candidates.len(), 12, "候选池应取满 12 个(非 9)");
     assert_eq!(s.page_candidates().len(), 9);
@@ -94,7 +94,7 @@ fn paging_via_minus_equal() {
 #[test]
 fn page_boundaries_and_reset() {
     let mut e = paged_fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'a' as u32);
     s.on_keysym(&mut e, K::KEY_equal);
     assert_eq!(s.page, 1);
@@ -114,7 +114,7 @@ fn page_boundaries_and_reset() {
 #[test]
 fn cn_punct_commit() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     // 空闲打 `.` → 中文句号
     let r = s.on_keysym(&mut e, K::KEY_period);
     assert_eq!(r.commit.as_deref(), Some("。"));
@@ -130,7 +130,7 @@ fn cn_punct_commit() {
 #[test]
 fn punct_english_mode_passthrough() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.toggle_punct(); // 切英文标点
     // 英文模式空闲打 `.`:不在映射生效,转发给应用(不消费)
     let r = s.on_keysym(&mut e, K::KEY_period);
@@ -143,7 +143,7 @@ fn punct_english_mode_passthrough() {
 #[test]
 fn quote_pairs_alternate() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     // 双引号开闭交替
     assert_eq!(s.on_keysym(&mut e, K::KEY_quotedbl).commit.as_deref(), Some("\u{201C}"));
     assert_eq!(s.on_keysym(&mut e, K::KEY_quotedbl).commit.as_deref(), Some("\u{201D}"));
@@ -155,7 +155,7 @@ fn quote_pairs_alternate() {
 #[test]
 fn modifier_keys_do_not_disturb_composing() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     s.on_keysym(&mut e, 'i' as u32);
     // 组字中按 Shift(欲打引号的 Shift+'):不上屏、不丢拼音,键转发
@@ -166,7 +166,7 @@ fn modifier_keys_do_not_disturb_composing() {
 #[test]
 fn shift_click_toggles_english() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     // 单击 Shift → 英文
     s.on_keysym(&mut e, K::KEY_Shift_L);
     assert!(s.on_release(K::KEY_Shift_L));
@@ -185,7 +185,7 @@ fn shift_click_toggles_english() {
 #[test]
 fn shift_chord_is_not_click() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, K::KEY_Shift_L);
     s.on_keysym(&mut e, 'n' as u32); // Shift+n:搭配了其他键
     assert!(!s.on_release(K::KEY_Shift_L), "Shift+字母不是单击,不应切换");
@@ -194,7 +194,7 @@ fn shift_chord_is_not_click() {
 #[test]
 fn shift_click_while_composing_clears_buffer() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     s.on_keysym(&mut e, 'i' as u32); // 组字中
     assert!(s.composing());
@@ -206,7 +206,7 @@ fn shift_click_while_composing_clears_buffer() {
 #[test]
 fn page_keys_at_boundary_dont_dismiss() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     s.on_keysym(&mut e, 'i' as u32); // 仅"你"一候选(单页,第一页=最后一页)
     // 第一页按 `-`:消费但不动,候选不取消、不上屏
@@ -220,7 +220,7 @@ fn page_keys_at_boundary_dont_dismiss() {
 #[test]
 fn tab_char_mode_pick_char_keeps_remaining_pinyin() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     for ch in "nihao".chars() {
         s.on_keysym(&mut e, ch as u32);
     }
@@ -256,7 +256,7 @@ fn tab_char_mode_pick_char_keeps_remaining_pinyin() {
 #[test]
 fn tab_toggles_back_to_sentence_mode() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     for ch in "nihao".chars() {
         s.on_keysym(&mut e, ch as u32);
     }
@@ -270,7 +270,7 @@ fn tab_toggles_back_to_sentence_mode() {
 #[test]
 fn escape_clears_char_mode() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     s.on_keysym(&mut e, 'n' as u32);
     s.on_keysym(&mut e, 'i' as u32);
     s.on_keysym(&mut e, K::KEY_Tab);
@@ -282,7 +282,7 @@ fn escape_clears_char_mode() {
 #[test]
 fn pick_full_candidate_clears_buffer() {
     let mut e = fixture();
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     for ch in "nihao".chars() {
         s.on_keysym(&mut e, ch as u32);
     }

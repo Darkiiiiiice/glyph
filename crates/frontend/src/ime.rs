@@ -36,7 +36,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
                 state.ime_active = false;
                 // 放弃进行中的组字,清 preedit 与候选窗
                 if state.session.composing() {
-                    state.session = crate::session::Session::new(state.config.punct_cn);
+                    state.session = crate::session::Session::new(state.config.punct_cn, state.config.page_size);
                     send_preedit(state, "");
                 }
                 crate::popup::hide(state);
@@ -44,6 +44,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
                     grab.release();
                 }
                 state.consumed_keys.clear();
+                state.held = None; // 键盘随 grab 销毁,停止重复
             }
             Event::Done => {
                 state.done_count = state.done_count.wrapping_add(1);

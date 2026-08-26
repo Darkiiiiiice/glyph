@@ -17,17 +17,16 @@ pub struct Reply {
     pub preedit_dirty: bool,
 }
 
-/// 一页候选数(数字键 1-9 直选)。
-const PAGE: usize = 9;
-/// 候选池大小(convert 的 limit):翻页的数据源,支持 POOL/PAGE 页。
-const POOL: usize = 90;
-
 pub struct Session {
     /// 当前拼音字母串,如 "nihao";空串 = 未在组字。
     pub buffer: String,
     pub candidates: Vec<Candidate>,
     /// 当前页码(0-based),输入变化/上屏时重置。
     page: usize,
+    /// 一页候选数(数字键 1-9 直选范围内)。
+    page_size: usize,
+    /// 候选池大小(convert 的 limit):翻页数据源,固定为 page_size 的 10 倍。
+    pool: usize,
     /// 中文标点模式:标点键上屏全角标点;`Ctrl+.` 切换中/英。
     punct_cn: bool,
     /// 双/单引号配对状态:true = 下次出闭引号。跨句保留(引号配对是全局输入状态)。
@@ -45,8 +44,9 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(punct_cn: bool) -> Self {
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false, prev_word: None }
+    pub fn new(punct_cn: bool, page_size: usize) -> Self {
+        let page_size = page_size.clamp(1, 20);
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, page_size, pool: page_size * 10, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false, prev_word: None }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {
@@ -82,7 +82,7 @@ impl Session {
             }
             K::KEY_1..=K::KEY_9 if self.composing() => {
                 let idx = (sym - K::KEY_1) as usize;
-                match self.candidates.get(self.page * PAGE + idx) {
+                match self.candidates.get(self.page * self.page_size + idx) {
                     Some(c) => {
                         let (text, consumed) = (c.text.clone(), c.consumed);
                         self.pick(engine, text, consumed)
@@ -90,7 +90,7 @@ impl Session {
                     None => Reply { consumed: true, ..Default::default() },
                 }
             }
-            K::KEY_space if self.composing() => match self.candidates.get(self.page * PAGE) {
+            K::KEY_space if self.composing() => match self.candidates.get(self.page * self.page_size) {
                 Some(c) => {
                     let (text, consumed) = (c.text.clone(), c.consumed);
                     self.pick(engine, text, consumed)
@@ -125,7 +125,7 @@ impl Session {
                 Reply { consumed: true, preedit_dirty: moved, ..Default::default() }
             }
             K::KEY_equal if self.composing() => {
-                let moved = (self.page + 1) * PAGE < self.candidates.len();
+                let moved = (self.page + 1) * self.page_size < self.candidates.len();
                 if moved {
                     self.page += 1;
                 }
@@ -189,9 +189,9 @@ impl Session {
         self.candidates = if self.buffer.is_empty() {
             Vec::new()
         } else if self.char_mode {
-            engine.first_syllable_chars(&self.buffer, POOL)
+            engine.first_syllable_chars(&self.buffer, self.pool)
         } else {
-            engine.convert_ctx(&self.buffer, POOL, self.prev_word.as_deref())
+            engine.convert_ctx(&self.buffer, self.pool, self.prev_word.as_deref())
         };
         self.page = 0;
     }
@@ -241,8 +241,8 @@ impl Session {
     }
     /// 当前页候选(候选窗渲染的数据源)。
     pub fn page_candidates(&self) -> &[Candidate] {
-        let start = (self.page * PAGE).min(self.candidates.len());
-        &self.candidates[start..(start + PAGE).min(self.candidates.len())]
+        let start = (self.page * self.page_size).min(self.candidates.len());
+        &self.candidates[start..(start + self.page_size).min(self.candidates.len())]
     }
     /// 上屏标点:组字中 = 当前页首选+标点(无候选则拼音原文+标点);空闲 = 直接标点。
     /// 首选为首词(部分消耗)时上屏首词+标点、剩余拼音继续组字。
@@ -250,7 +250,7 @@ impl Session {
         if self.composing() {
             let (text, consumed) = self
                 .candidates
-                .get(self.page * PAGE)
+                .get(self.page * self.page_size)
                 .map(|c| (c.text.clone(), c.consumed))
                 .unwrap_or_else(|| (self.buffer.clone(), usize::MAX));
             self.pick(engine, text + p, consumed)

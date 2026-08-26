@@ -27,7 +27,14 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
     ) {
         match event {
             Event::Keymap { format, fd, size } => on_keymap(state, format, fd, size),
-            Event::Key { time, key, state: st, .. } => on_key(state, time, key, st, qh),
+            Event::Key { time, key, state: st, .. } => {
+                let sym = on_key(state, time, key, st, qh);
+                if st == WEnum::Value(wl_keyboard::KeyState::Pressed) {
+                    // 长按重复记账:可重复键成为"按住键";不可重复键(修饰键等)按下则停重复。
+                    state.held = crate::repeat::repeat_delay(state, sym)
+                        .map(|d| crate::repeat::HeldKey { key, next: std::time::Instant::now() + d });
+                }
+            }
             Event::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
                 log::debug!("grab modifiers: d={mods_depressed} l={mods_latched} g={group} vkb_ready={}", state.vkb_ready);
                 if let Some(xs) = &mut state.xkb_state {
@@ -42,7 +49,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                     state.pending_modifiers = Some((mods_depressed, mods_latched, mods_locked, group));
                 }
             }
-            Event::RepeatInfo { .. } => {} // M1 不做长按重复
+            Event::RepeatInfo { rate, delay } => {
+                log::debug!("repeat_info: rate={rate}/s delay={delay}ms");
+                state.repeat_info = Some((rate as u32, delay as u32));
+            }
             _ => {} // non_exhaustive:lib 侧生成的枚举跨 crate 需兜底
         }
         let _ = qh;
@@ -95,18 +105,27 @@ fn on_keymap(state: &mut State, format: WEnum<wl_keyboard::KeymapFormat>, fd: st
     }
 }
 
-fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyState>, qh: &wayland_client::QueueHandle<State>) {
+/// 长按重复合成的一次按下:与真实按下走完全相同的路径(on_key 的 pressed 分支)。
+/// held 记账只在 Dispatch 层对真实按键做,合成键不触碰,计时由 repeat::tick 推进。
+pub(crate) fn press(state: &mut State, time: u32, key: u32, qh: &wayland_client::QueueHandle<State>) {
+    on_key(state, time, key, WEnum::Value(wl_keyboard::KeyState::Pressed), qh);
+}
+
+fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyState>, qh: &wayland_client::QueueHandle<State>) -> u32 {
     let pressed = st == WEnum::Value(wl_keyboard::KeyState::Pressed);
     let st_raw = match st {
         WEnum::Value(v) => v as u32,
         WEnum::Unknown(u) => u,
     };
+    // 返回值:pressed 时为 keysym(Dispatch 层做长按重复记账),release 时为 0。
+    let mut out_sym = 0u32;
     if pressed {
         let sym = state
             .xkb_state
             .as_ref()
             .map(|xs| u32::from(xs.key_get_one_sym(xkb::Keycode::new(key + EVDEV_TO_XKB))))
             .unwrap_or(0);
+        out_sym = sym;
         // Ctrl/Alt/Super 按住时,字母键是快捷键而非拼音输入(xkb 对带修饰的
         // 字母仍返回小写 keysym),必须转发给 compositor/应用。
         // Shift 不用特判:shift+a 的 keysym 是大写 A,天然不进字母分支。
@@ -159,6 +178,9 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
             forward_key(state, time, key, st_raw);
         }
     } else {
+        if state.held.is_some_and(|h| h.key == key) {
+            state.held = None; // 按住的键松开:停止重复
+        }
         // 送 session:检测 Shift 单击(press 后 release 无其他键 = 切换中/英)。
         let sym = state
             .xkb_state
@@ -179,6 +201,7 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
             None => forward_key(state, time, key, st_raw), // 未知按键:保守转发
         }
     }
+    out_sym
 }
 
 fn forward_key(state: &State, time: u32, key: u32, st: u32) {

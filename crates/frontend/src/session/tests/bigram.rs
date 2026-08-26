@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn bigram_prev_word_affects_candidates() {
     let mut e = Engine::from_str("wo'men 我们 9000\nxue'xi 学习 100\nxue'xi 穴息 5000\n");
-    let mut s = Session::new(true);
+    let mut s = Session::new(true, 9);
     for _ in 0..5 {
         e.learn_bigram("我们", "学习");
     }
