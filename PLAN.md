@@ -78,7 +78,15 @@ im-v2 连 niri → 键盘 grab → preedit 发进应用 → **im-v2 commit_strin
 
 ### 词库增强:合并 rime-ice + rime-frost ✅(2026-08-24)
 glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加进 lexicon.txt,词库 343,582 → **1,392,747** 条(+105 万)。规则:已有 (词,拼音) 保留 jieba 词频;带权重源(ice/frost base、frost ext、ice 8105)按 ln 空间 p50/p90 分位锚定映射到现有词频带并 clamp;平权源常数(ext=30、tencent=5、生僻字=3);ice/tencent 98 万条不并(frost 已是其精选);frost word/chengyu 是双拼码表、corrections 容错注音,均不可用。校验:词全 CJK + 音节在既有音节表。
-**效果**(41 个常见输入对比):榜首 41/41 不变;top-9 换血 8.4%,几乎全是"字符拼合垃圾→真词"(旧 kexue 尾部 可学/可血/可雪 换成 咳血 等)。机制:total_freq 膨胀 Δ=ln(T1/T0)=1.02,单词边全体 -1.02 对数分、双段拼合路径 -2.03,拼合垃圾系统性下沉;user_freq/bigram boost 相对增强 ~1 对数分。常数校准合理(ext=30 压过碎片但压不过既有真词)。成本:加载 ~3.5s(release)、daemon RSS ~1.3GB(trie 每节点 HashMap 所致,紧凑化为后续优化项)。
+**效果**(41 个常见输入对比):榜首 41/41 不变;top-9 换血 8.4%,几乎全是"字符拼合垃圾→真词"(旧 kexue 尾部 可学/可血/可雪 换成 咳血 等)。机制:total_freq 膨胀 Δ=ln(T1/T0)=1.02,单词边全体 -1.02 对数分、双段拼合路径 -2.03,拼合垃圾系统性下沉;user_freq/bigram boost 相对增强 ~1 对数分。常数校准合理(ext=30 压过碎片但压不过既有真词)。成本:加载与内存见下节(池化已解决)。
+
+### Trie 池化紧凑化 ✅(2026-08-26)
+**成果**:daemon RSS **1.0GB → 0.16GB**(6.4x),加载 **3.2s → 1.4s**(排序记录法构建比逐行插 HashMap 树还快),19 探针候选与旧版逐字节一致,53 测试全过。
+**结构**(dict.rs 查询 + dict/build.rs 构建):
+- trie 边存 u16 音节编号(音节表仅 ~410 个),节点池/边池/词条池/文本 String arena 四个大分配;词文本不再一词一个堆块。
+- 构建零树形结构:每行解析成 20B 定长记录进大 Vec,按音节路径稳定排序(同路径词保持文件序),一遍递归展平——子边先占位再递归保证连续,word_len 在递归子树**前**定格(否则子树词条漏进前缀节点,契约测试 words_stop_at_exact_path 锁定)。
+- 简拼/混合拼索引路径化:桶里只存音节路径(Box→池区间),词文本/词频查询时沿路径走 trie 解析,省掉百万份重复字符串;dict 侧 `jianpin_bucket`/`words_at_path`/`syll_str` 三个接口,segment 按 id 比对槽位。
+**根因教训(为什么必须动构建而非换分配器)**:旧版压实后 RSS 仍 ~640MB 而实测活数据仅 ~300MB——两百万个 40B 小堆块与构建垃圾交错造成**页稀疏**(每 4K 页都有活块,任何分配器都无法 unmap;glibc/mimalloc 实测同高,malloc_trim 只收堆顶无效)。诊断手法:python 统计节点/词条数估活数据 + /proc/pid/smaps 按区间聚合看 RSS 构成。解法:让构建期也只产生少数大分配,垃圾释放后堆顶连续,trim 自然生效。
 
 ### M4 毕业项目
 niri 侧协议修复 + 上游 PR。输入法 + 合成器两端全掌握，是本项目独有的学习场景。

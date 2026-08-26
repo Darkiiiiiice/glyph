@@ -1,9 +1,18 @@
-//! 词典：以音节为键的 trie，每个节点挂着该音节序列对应的全部（词, 词频）。
+//! 词典：音节 trie，池化紧凑布局（1.39M 词条,daemon RSS ~1.0GB → ~0.2GB,实测见 PLAN.md）。
 //!
 //! lexicon 文件行格式（glyph-build 生成）：`pin'yin 词 词频`，空白分隔。
 //! 词库加载后同时派生出两样东西：
 //! - `syllables`：全部出现过的音节集合 → 音节格的合法性判据；
 //! - `total_freq`：词频总和 → unigram 概率的分母。
+//!
+//! 紧凑化设计：
+//! - 音节全表仅 ~410 个，trie 边存 u16 音节编号而非字符串；
+//! - 构建零树形结构:每行解析成定长记录进大 Vec,按音节路径稳定排序后
+//!   一遍递归展平成节点池/边池/词条池/文本 arena——旧实现每节点一个
+//!   HashMap、200 万个小堆块与构建垃圾交错,页稀疏把 RSS 顶在 2x 活数据,
+//!   换分配器无效,只能让构建期也不产生小堆块;
+//! - 词文本全部进一个 String arena,词条存 (偏移, 长度, 词频);
+//! - 简拼索引条目只存音节路径,词文本/词频查询时沿路径走 trie 解析。
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -12,23 +21,64 @@ use std::path::Path;
 
 use crate::syllable::Lattice;
 
-#[derive(Default)]
-struct Node {
-    children: HashMap<String, Node>,
-    /// 该音节序列对应的词，按词频降序（finish 时排序）。
-    words: Vec<(String, u32)>,
+mod build;
+
+/// 音节编号：边池与简拼路径的键。音节表仅数百项，u16 足够。
+pub(crate) type SyllId = u16;
+
+/// 节点槽：子边与词条分别是边池/词条池中的连续段。下标 0 是根。
+#[derive(Default, Clone, Copy)]
+struct NodeSlot {
+    child_off: u32,
+    child_len: u32,
+    word_off: u32,
+    word_len: u32,
+}
+
+/// 词条槽：词文本在 texts arena 中的切片 + 词频。
+#[derive(Clone, Copy)]
+struct WordSlot {
+    text_off: u32,
+    text_len: u32,
+    freq: u32,
+}
+
+/// 一条词边（trie 某节点挂的词列表）的只读视图。
+pub(crate) struct WordEdges<'a> {
+    slots: &'a [WordSlot],
+    texts: &'a str,
+}
+
+impl<'a> WordEdges<'a> {
+    /// (词文本, 词频)，按词频降序。
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&'a str, u32)> + '_ {
+        self.slots.iter().map(|w| {
+            let (a, b) = (w.text_off as usize, (w.text_off + w.text_len) as usize);
+            (&self.texts[a..b], w.freq)
+        })
+    }
 }
 
 pub struct Lexicon {
-    root: Node,
+    nodes: Vec<NodeSlot>,
+    /// (音节编号, 子节点下标)，每个节点的子边连续且按编号有序。
+    edges: Vec<(SyllId, u32)>,
+    words: Vec<WordSlot>,
+    /// 全部词文本的单一 arena。
+    texts: String,
     pub syllables: HashSet<String>,
+    /// 音节 → 编号：查询侧把音节格上的音节串翻成边池的键。
+    syllable_ids: HashMap<String, SyllId>,
+    /// 编号 → 音节串（id 即下标）,finish 时从 syllable_ids 反转生成。
+    syllable_strs: Vec<String>,
     pub total_freq: u64,
     /// 用户词频:整句候选 text → 被选择次数。动态调频层,不混入 trie/total_freq。
     pub user_freq: HashMap<String, u32>,
-    /// 简拼/混合拼索引:多字词各字声母连成的 key(你好→nh、中国→zhg)
-    /// → [(词, 词频, 音节序列)],finish 时按词频降序。音节序列(' 分隔)供混合拼
-    /// (lij→[li][j])精确槽过滤;索引不参与音节格 DP。
-    pub jianpin: HashMap<String, Vec<(String, u32, Box<str>)>>,
+    /// 简拼/混合拼索引:声母 key(你好→nh、中国→zhg) → jp_entries 中的连续段;
+    /// 每条目又是 paths 池的一段音节路径(finish 时桶内排序去重)。
+    jianpin: HashMap<String, (u32, u32)>,
+    jp_entries: Vec<(u32, u32)>,
+    paths: Vec<SyllId>,
     /// 用户二元搭配(bigram):上一次上屏的尾词 → {当前词 → 搭配次数}。
     /// 冷启动从用户输入历史积累,无外部语料;嵌套 map 使查询免 tuple 分配。
     pub user_bigram: HashMap<String, HashMap<String, u32>>,
@@ -36,21 +86,69 @@ pub struct Lexicon {
 
 impl Lexicon {
     pub fn load(path: &Path) -> io::Result<Self> {
-        let mut lex = Self::empty();
+        let mut b = build::Builder::default();
         for (lineno, line) in BufReader::new(File::open(path)?).lines().enumerate() {
             let line = line?;
             if line.is_empty() {
                 continue;
             }
-            lex.insert_line(&line).map_err(|msg| {
+            b.insert_line(&line).map_err(|msg| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("{}:{}: {}", path.display(), lineno + 1, msg),
                 )
             })?;
         }
-        lex.finish();
-        Ok(lex)
+        Ok(b.finish())
+    }
+
+    /// 从行格式文本构建(测试与 Engine::from_str 用)。
+    pub fn from_lines(lines: &str) -> Self {
+        let mut b = build::Builder::default();
+        for line in lines.lines().filter(|l| !l.is_empty()) {
+            b.insert_line(line).unwrap();
+        }
+        b.finish()
+    }
+
+    /// 编号 → 音节串。
+    pub(crate) fn syll_str(&self, id: SyllId) -> &str {
+        &self.syllable_strs[id as usize]
+    }
+
+    /// 节点的子节点(按音节编号二分)。
+    fn child(&self, ni: u32, id: SyllId) -> Option<u32> {
+        let n = &self.nodes[ni as usize];
+        let es = &self.edges[n.child_off as usize..(n.child_off + n.child_len) as usize];
+        es.binary_search_by_key(&id, |&(s, _)| s).ok().map(|i| es[i].1)
+    }
+
+    fn word_edges(&self, ni: u32) -> WordEdges<'_> {
+        let n = &self.nodes[ni as usize];
+        WordEdges {
+            slots: &self.words[n.word_off as usize..(n.word_off + n.word_len) as usize],
+            texts: &self.texts,
+        }
+    }
+
+    /// 按音节路径走 trie,返回终点节点挂的词边(简拼桶解析用)。
+    /// 路径来自词库构建,必合法;中间断裂防御性返回 None。
+    pub(crate) fn words_at_path(&self, path: &[SyllId]) -> Option<WordEdges<'_>> {
+        let mut ni = 0;
+        for &id in path {
+            ni = self.child(ni, id)?;
+        }
+        Some(self.word_edges(ni))
+    }
+
+    /// 简拼/混合拼桶:声母 key → 桶内各音节路径。
+    pub(crate) fn jianpin_bucket(&self, key: &str) -> Option<impl Iterator<Item = &[SyllId]> + '_> {
+        let &(off, len) = self.jianpin.get(key)?;
+        Some(
+            self.jp_entries[off as usize..(off + len) as usize]
+                .iter()
+                .map(|&(o, l)| &self.paths[o as usize..(o + l) as usize]),
+        )
     }
 
     /// 在音节格上走 trie，回调每一条命中的词边：（起点字节, 终点字节, 词条列表）。
@@ -59,84 +157,33 @@ impl Lexicon {
     pub fn for_each_word_edge<'a>(
         &'a self,
         lattice: &Lattice,
-        mut f: impl FnMut(usize, usize, &'a [(String, u32)]),
+        mut f: impl FnMut(usize, usize, WordEdges<'a>),
     ) {
-        let mut stack: Vec<(&Node, usize)> = Vec::new();
+        let mut stack: Vec<(u32, usize)> = Vec::new();
         for start in 0..lattice.text.len() {
             if lattice.starts[start].is_empty() {
                 continue;
             }
-            stack.push((&self.root, start));
-            while let Some((node, pos)) = stack.pop() {
+            stack.push((0, start));
+            while let Some((ni, pos)) = stack.pop() {
                 for &idx in &lattice.starts[pos] {
                     let (a, b) = lattice.syllables[idx];
-                    match node.children.get(&lattice.text[a..b]) {
-                        Some(child) => {
-                            if !child.words.is_empty() {
-                                f(start, b, &child.words);
-                            }
-                            stack.push((child, b));
+                    // 音节表即由本词库构建,必命中;取不到防御性剪枝
+                    let Some(&id) = self.syllable_ids.get(&lattice.text[a..b]) else {
+                        continue;
+                    };
+                    if let Some(ci) = self.child(ni, id) {
+                        if self.nodes[ci as usize].word_len > 0 {
+                            f(start, b, self.word_edges(ci));
                         }
-                        None => {} // 该音节序列无词，剪枝
+                        stack.push((ci, b));
                     }
                 }
             }
         }
     }
-
-    fn empty() -> Self {
-        Self { root: Node::default(), syllables: HashSet::new(), total_freq: 0, user_freq: HashMap::new(), jianpin: HashMap::new(), user_bigram: HashMap::new() }
-    }
-
-    fn insert_line(&mut self, line: &str) -> Result<(), String> {
-        let mut fields = line.split_whitespace();
-        let pinyin = fields.next().ok_or("缺拼音列")?;
-        let word = fields.next().ok_or("缺词列")?;
-        let freq: u32 =
-            fields.next().and_then(|s| s.parse().ok()).ok_or("缺词频列")?;
-        let sylls: Vec<&str> = pinyin.split('\'').collect();
-        if sylls.iter().any(|s| s.is_empty()) {
-            return Err(format!("拼音含空音节: {pinyin}"));
-        }
-        let mut node = &mut self.root;
-        for syll in &sylls {
-            self.syllables.insert(syll.to_string());
-            node = node.children.entry(syll.to_string()).or_default();
-        }
-        node.words.push((word.to_string(), freq));
-        self.total_freq += u64::from(freq);
-        // 多字词建简拼索引:各音节声母连成 key;音节序列一并存下(混合拼过滤用)。
-        if sylls.len() >= 2 {
-            let key: String = sylls.iter().map(|s| shengmu(s)).collect();
-            self.jianpin
-                .entry(key)
-                .or_default()
-                .push((word.to_string(), freq, sylls.join("'").into()));
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self) {
-        fn sort_node(node: &mut Node) {
-            node.words.sort_by(|a, b| b.1.cmp(&a.1));
-            node.children.values_mut().for_each(sort_node);
-        }
-        sort_node(&mut self.root);
-        for v in self.jianpin.values_mut() {
-            v.sort_by(|a, b| b.1.cmp(&a.1));
-        }
-    }
-
-    /// 从行格式文本构建(测试与 Engine::from_str 用)。
-    pub fn from_lines(lines: &str) -> Self {
-        let mut lex = Self::empty();
-        for line in lines.lines().filter(|l| !l.is_empty()) {
-            lex.insert_line(line).unwrap();
-        }
-        lex.finish();
-        lex
-    }
 }
+
 /// 音节的声母(简拼 key 用):zh/ch/sh 为双字母整体,其余取首字母
 /// (零声母音节 a/o/e 开头取首字母,如 an→a、ou→o)。
 pub(crate) fn shengmu(syll: &str) -> &str {
@@ -148,24 +195,4 @@ pub(crate) fn shengmu(syll: &str) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn derives_syllables_and_total() {
-        let lex = Lexicon::from_lines("ni'hao 你好 10000\nni 你 500\nhao 好 300\n");
-        assert!(lex.syllables.contains("ni") && lex.syllables.contains("hao"));
-        assert_eq!(lex.total_freq, 10800);
-    }
-    #[test]
-    fn builds_jianpin_index() {
-        let lex = Lexicon::from_lines(
-            "ni'hao 你好 10000\nzhong'guo 中国 8000\nni 你 500\n",
-        );
-        // 多字词建简拼;zh 是双字母声母整体
-        assert!(lex.jianpin["nh"].iter().any(|(w, ..)| w == "你好"));
-        assert!(lex.jianpin["zhg"].iter().any(|(w, ..)| w == "中国"));
-        // 单字不进简拼索引
-        assert!(!lex.jianpin.values().flatten().any(|(w, ..)| w == "你"));
-    }
-}
+mod tests;
