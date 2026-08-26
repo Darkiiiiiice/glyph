@@ -25,9 +25,10 @@ pub struct Lexicon {
     pub total_freq: u64,
     /// 用户词频:整句候选 text → 被选择次数。动态调频层,不混入 trie/total_freq。
     pub user_freq: HashMap<String, u32>,
-    /// 简拼索引:多字词各字声母连成的 key(你好→nh、中国→zhg) → [(词, 词频)],
-    /// finish 时按词频降序。简拼是精确声母匹配,不参与音节格 DP。
-    pub jianpin: HashMap<String, Vec<(String, u32)>>,
+    /// 简拼/混合拼索引:多字词各字声母连成的 key(你好→nh、中国→zhg)
+    /// → [(词, 词频, 音节序列)],finish 时按词频降序。音节序列(' 分隔)供混合拼
+    /// (lij→[li][j])精确槽过滤;索引不参与音节格 DP。
+    pub jianpin: HashMap<String, Vec<(String, u32, Box<str>)>>,
     /// 用户二元搭配(bigram):上一次上屏的尾词 → {当前词 → 搭配次数}。
     /// 冷启动从用户输入历史积累,无外部语料;嵌套 map 使查询免 tuple 分配。
     pub user_bigram: HashMap<String, HashMap<String, u32>>,
@@ -104,10 +105,13 @@ impl Lexicon {
         }
         node.words.push((word.to_string(), freq));
         self.total_freq += u64::from(freq);
-        // 多字词建简拼索引:各音节声母连成 key。
+        // 多字词建简拼索引:各音节声母连成 key;音节序列一并存下(混合拼过滤用)。
         if sylls.len() >= 2 {
             let key: String = sylls.iter().map(|s| shengmu(s)).collect();
-            self.jianpin.entry(key).or_default().push((word.to_string(), freq));
+            self.jianpin
+                .entry(key)
+                .or_default()
+                .push((word.to_string(), freq, sylls.join("'").into()));
         }
         Ok(())
     }
@@ -135,7 +139,7 @@ impl Lexicon {
 }
 /// 音节的声母(简拼 key 用):zh/ch/sh 为双字母整体,其余取首字母
 /// (零声母音节 a/o/e 开头取首字母,如 an→a、ou→o)。
-fn shengmu(syll: &str) -> &str {
+pub(crate) fn shengmu(syll: &str) -> &str {
     if syll.is_empty() {
         return ""; // 保险:insert_line 已拒空音节(拼音含空音节→Err),此处仅防御
     }
@@ -159,9 +163,9 @@ mod tests {
             "ni'hao 你好 10000\nzhong'guo 中国 8000\nni 你 500\n",
         );
         // 多字词建简拼;zh 是双字母声母整体
-        assert!(lex.jianpin["nh"].iter().any(|(w, _)| w == "你好"));
-        assert!(lex.jianpin["zhg"].iter().any(|(w, _)| w == "中国"));
+        assert!(lex.jianpin["nh"].iter().any(|(w, ..)| w == "你好"));
+        assert!(lex.jianpin["zhg"].iter().any(|(w, ..)| w == "中国"));
         // 单字不进简拼索引
-        assert!(!lex.jianpin.values().flatten().any(|(w, _)| w == "你"));
+        assert!(!lex.jianpin.values().flatten().any(|(w, ..)| w == "你"));
     }
 }

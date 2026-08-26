@@ -7,8 +7,8 @@
 
 use std::collections::HashSet;
 
-use crate::dict::Lexicon;
-use crate::syllable;
+use crate::dict::{Lexicon, shengmu};
+use crate::syllable::{self, Lattice};
 
 /// 一个整句候选。
 #[derive(Debug)]
@@ -81,16 +81,21 @@ pub fn convert_ctx(lex: &Lexicon, input: &str, limit: usize, prev: Option<&str>)
         })
         .collect();
 
-    // 简拼候选:输入(音节格已去 ')作为声母 key 精确匹配。score 用同一
-    // unigram 对数量纲 ln(freq/total),与全拼候选公平竞争。
-    if let Some(jp) = lex.jianpin.get(&lattice.text) {
-        for (word, freq) in jp {
-            cands.push(Candidate {
-                text: word.clone(),
-                words: vec![word.clone()],
-                score: (*freq as f64 / total).ln(),
-                consumed: len,
-            });
+    // 简拼/混合拼候选:枚举输入的"音节或声母"槽位切分(lij→[li][j],
+    // 纯声母 nh 是全 None 的特例),声母 key 定位索引桶,再按音节槽精确过滤
+    // (逻辑 luo'ji 声母同为 lj 但首槽≠li,被滤掉)。score 与全拼同量纲公平竞争。
+    for (key, slots) in mixed_patterns(&lattice) {
+        if let Some(jp) = lex.jianpin.get(&key) {
+            for (word, freq, sylls) in jp {
+                if slots_match(sylls, &slots) {
+                    cands.push(Candidate {
+                        text: word.clone(),
+                        words: vec![word.clone()],
+                        score: (*freq as f64 / total).ln(),
+                        consumed: len,
+                    });
+                }
+            }
         }
     }
 
@@ -114,6 +119,74 @@ pub fn convert_ctx(lex: &Lexicon, input: &str, limit: usize, prev: Option<&str>)
         .collect();
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
     ranked.into_iter().take(limit).map(|(_, c)| c).collect()
+}
+
+/// 混合拼槽位切分枚举:把输入切成 ≥2 个槽,每槽是完整音节(精确,取自音节格)
+/// 或声母(模糊;zh/ch/sh 双字母,或单字母声母/零声母 a/e/o)。
+/// 返回 (声母 key, 各槽精确音节)。i/u/v 不能作声母,相应切分自然剪枝。
+fn mixed_patterns(lattice: &Lattice) -> Vec<(String, Vec<Option<&str>>)> {
+    fn dfs<'a>(
+        lattice: &'a Lattice,
+        pos: usize,
+        key: &mut String,
+        slots: &mut Vec<Option<&'a str>>,
+        out: &mut Vec<(String, Vec<Option<&'a str>>)>,
+    ) {
+        let text = lattice.text.as_str();
+        if pos == text.len() {
+            if slots.len() >= 2 {
+                out.push((key.clone(), slots.clone()));
+            }
+            return;
+        }
+        let rest = &text[pos..];
+        let b = rest.as_bytes()[0];
+        if matches!(b, b'b' | b'p' | b'm' | b'f' | b'd' | b't' | b'n' | b'l' | b'g' | b'k'
+            | b'h' | b'j' | b'q' | b'x' | b'r' | b'z' | b'c' | b's' | b'y' | b'w'
+            | b'a' | b'e' | b'o')
+        {
+            key.push(b as char);
+            slots.push(None);
+            dfs(lattice, pos + 1, key, slots, out);
+            slots.pop();
+            key.pop();
+            if rest.len() >= 2 && matches!(&rest[..2], "zh" | "ch" | "sh") {
+                key.push_str(&rest[..2]);
+                slots.push(None);
+                dfs(lattice, pos + 2, key, slots, out);
+                slots.pop();
+                key.truncate(key.len() - 2);
+            }
+        }
+        for &idx in &lattice.starts[pos] {
+            let (a, end) = lattice.syllables[idx];
+            let syll = &text[a..end];
+            let sm = shengmu(syll);
+            key.push_str(sm);
+            slots.push(Some(syll));
+            dfs(lattice, end, key, slots, out);
+            slots.pop();
+            key.truncate(key.len() - sm.len());
+        }
+    }
+    let mut out = Vec::new();
+    dfs(lattice, 0, &mut String::new(), &mut Vec::new(), &mut out);
+    out
+}
+
+/// 词条音节序列(' 分隔)是否满足槽位约束:槽数相等,精确槽音节相同
+/// (声母槽的声母相等已由 key 命中保证,无需再查)。
+fn slots_match(sylls: &str, slots: &[Option<&str>]) -> bool {
+    let mut it = sylls.split('\'');
+    for slot in slots {
+        let Some(s) = it.next() else { return false };
+        if let Some(exact) = slot {
+            if s != *exact {
+                return false;
+            }
+        }
+    }
+    it.next().is_none()
 }
 
 /// Tab 单字模式:第一音节的全部单字候选(逐字定字)。

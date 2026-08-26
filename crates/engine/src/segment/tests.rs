@@ -105,6 +105,33 @@ fn jianpin_matches_shengmu_key() {
 }
 
 #[test]
+fn mixed_jianpin_full_syllable_plus_shengmu() {
+    let lex = Lexicon::from_lines(
+        "li'jie 理解 5000\nli'ji 立即 4000\nluo'ji 逻辑 3000\nlian'jie 连接 8000\n",
+    );
+    // lij = [li][j] 混合拼:首槽精确 li、次槽声母 j → 理解/立即 命中
+    let cands = convert(&lex, "lij", 9);
+    let texts: Vec<&str> = cands.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts.first(), Some(&"理解"));
+    assert!(texts.contains(&"立即"));
+    // 声母同为 lj 但首槽非 li 的被精确槽过滤
+    assert!(!texts.contains(&"逻辑"), "luo'ji 首槽≠li 应过滤: {texts:?}");
+    assert!(!texts.contains(&"连接"), "lian'jie 首槽≠li 应过滤: {texts:?}");
+}
+
+#[test]
+fn mixed_jianpin_zh_shengmu() {
+    let lex = Lexicon::from_lines("zhong'guo 中国 8000\nzhan'guo 战国 5000\n");
+    // zhongg = [zhong][g]:zh 双字母声母在精确槽里整体匹配
+    assert_eq!(convert(&lex, "zhongg", 9)[0].text, "中国");
+    // zhg 纯简拼行为不变(zh 声母槽)
+    assert_eq!(convert(&lex, "zhg", 9)[0].text, "中国");
+    // "zhang" 非音节,但音节格切出 [zhan][g] 混合拼 → 战国 命中
+    // (中国 zhong'guo 首槽≠zhan 被滤);与主流输入法行为一致
+    assert_eq!(convert(&lex, "zhang", 9)[0].text, "战国");
+}
+
+#[test]
 fn bigram_narrow_gap_flips_once_and_recovers() {
     // 窄 gap(世纪 21100 vs 实际 12010,ln gap≈0.56):1 次搭配即翻盘,对称各 1 次恢复静态序。
     // "一次即学"是刻意行为(与 USER_W 同量纲);翻转只在相邻名次间,两词始终前二可见。
