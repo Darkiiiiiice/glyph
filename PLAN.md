@@ -100,5 +100,9 @@ niri 侧协议修复 + 上游 PR。输入法 + 合成器两端全掌握，是本
 
 ## 待解决
 
-- [ ] X11 应用中文输入:fcitx5 XIM 共存方案(只设 XMODIFIERS=@im=fcitx、禁 waylandim、保 ibus 前端),尚未落地
+- [x] X11 应用中文输入:fcitx5 X11-only 共存已落地(2026-08-27)。方案:`~/.config/fcitx5/config` 加
+  `[Behavior/DisabledAddons]` 段 `0=waylandim`(fcitx5 ini 的 vector 是编号子键格式,扁平
+  `DisabledAddons=waylandim` 和 `[Addons/waylandim] Enabled=False` 均无效);niri 环境只设
+  `XMODIFIERS=@im=fcitx`,不设全局 GTK_IM_MODULE/QT_IM_MODULE。验证:fcitx5 日志无 waylandim、
+  `xprop -root XIM_SERVERS` = @server=fcitx、glyph 独占 im-v2 activate。ibus/dbus 前端保留(X11 Electron 用)
 - [ ] M4:niri im-v2/vkb 已知问题修复 + 上游 PR
