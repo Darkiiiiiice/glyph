@@ -127,6 +127,13 @@ fn main() -> ExitCode {
         match poll(&mut fds, timeout.as_ref()) {
             Ok(n) if n > 0 && fds[0].revents().contains(PollFlags::IN) => {
                 if let Err(e) = guard.read() {
+                    // 非阻塞 fd 的 EAGAIN 是良性假唤醒(官方模式要求重试),丢弃本轮即可;
+                    // read() 无论成败都已消费 guard,直接回循环头重新 prepare。
+                    if matches!(&e, wayland_client::backend::WaylandError::Io(io)
+                        if io.kind() == std::io::ErrorKind::WouldBlock)
+                    {
+                        continue;
+                    }
                     eprintln!("glyph: 事件读取失败: {e}");
                     return ExitCode::FAILURE;
                 }
