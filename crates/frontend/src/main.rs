@@ -65,6 +65,16 @@ fn main() -> ExitCode {
         Ok(_) => {}
         Err(e) => log::warn!("用户 bigram 加载失败 {}: {e}(忽略,首次运行正常)", bp.display()),
     }
+    // trigram 双词搭配加载(与 user_freq 同目录派生路径 user_trigram.txt)
+    let tp = uf.with_file_name("user_trigram.txt");
+    match Engine::load_trigram(&tp) {
+        Ok(map) if !map.is_empty() => {
+            log::info!("用户 trigram {} 组 ← {}", map.len(), tp.display());
+            engine.set_user_trigram(map);
+        }
+        Ok(_) => {}
+        Err(e) => log::warn!("用户 trigram 加载失败 {}: {e}(忽略,首次运行正常)", tp.display()),
+    }
     // 用户造词 overlay 加载(与 user_freq 同目录派生路径 user_dict.txt)
     let dp = uf.with_file_name("user_dict.txt");
     match engine.load_user_dict(&dp) {

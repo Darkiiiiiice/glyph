@@ -59,14 +59,14 @@ use super::*;
     fn bigram_boosts_matching_first_word() {
         let mut e = Engine::from_str("xue'xi 学习 100\nxue'xi 穴息 5000\nwo'men 我们 9000\n");
         // 无上文:词频高的"穴息"在前
-        assert_eq!(e.convert_ctx("xuexi", 9, None)[0].text, "穴息");
+        assert_eq!(e.convert_ctx("xuexi", 9, &[])[0].text, "穴息");
         // 记录搭配 我们→学习 5 次后,带上文"我们"时"学习"上浮到首位
         for _ in 0..5 {
             e.learn_bigram("我们", "学习");
         }
-        assert_eq!(e.convert_ctx("xuexi", 9, Some("我们"))[0].text, "学习");
+        assert_eq!(e.convert_ctx("xuexi", 9, &["我们"])[0].text, "学习");
         // 不同上文(无搭配记录)仍按纯词频
-        assert_eq!(e.convert_ctx("xuexi", 9, Some("他们"))[0].text, "穴息");
+        assert_eq!(e.convert_ctx("xuexi", 9, &["他们"])[0].text, "穴息");
     }
 
     #[test]
@@ -116,5 +116,19 @@ use super::*;
         e.save_bigram(&p).unwrap();
         let loaded = Engine::load_bigram(&p).unwrap();
         assert_eq!(loaded.get("我们").and_then(|m| m.get("学习")), Some(&2));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn trigram_survives_roundtrip() {
+        let mut e = Engine::from_str("wo'men 我们 9000\nai 爱 8000\nxue'xi 学习 100\n");
+        e.learn_trigram("我们", "爱", "学习");
+        e.learn_trigram("我们", "爱", "学习");
+        let dir = std::env::temp_dir().join("glyph_test_trigram");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("trigram.txt");
+        e.save_trigram(&p).unwrap();
+        let loaded = Engine::load_trigram(&p).unwrap();
+        assert_eq!(loaded.get("我们").and_then(|m| m.get("爱")).and_then(|m| m.get("学习")), Some(&2));
         std::fs::remove_file(&p).ok();
     }

@@ -116,6 +116,18 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 - **测试**:word_char.rs 4 个(首/尾字+prev_word、无候选落空、空闲转发、char 模式落空);
   顺手把 tests/mod.rs(301 行越线)按主题拆出 char_mode.rs / paging.rs。
 
+### 整句级学习(trigram 双词上文) ✅(2026-08-28)
+- **行为**:上屏历史窗口加到最近两个尾词(session/ctx.rs);候选首词与 (上上文,上一词)
+  有搭配记录时上浮 TRIGRAM_W·ln(1+count),TRIGRAM_W=10(1 次双词搭配翻 p99 gap:10·ln2≈6.93>6.78)。
+- **max 语义(关键决策)**:bigram/trigram 增量取 max 不相加——同一次上屏同时写两条记录,
+  相加是双记一份证据;max 保留各自独立积累中更强者(契约测试 trigram_and_bigram_take_max_not_sum 锁定)。
+- **API**:`convert_ctx(ctx: &[&str])` 最近优先切片(原 Option 签名全仓迁移);持久化
+  user_trigram.txt(`上上文 上文 当前词 次数` 行),load/save/set 均镜像 bigram 模式。
+- **BIGRAM_W=6 与既有公式未动**(调校定案),bigram 契约测试原样通过;纯加一层。
+- **测试**:引擎 4(翻 p99/双词缺一不可/max 语义/roundtrip)+ ctx 窗口 1 + session 端到端 1
+  (gap 隔离:5.50∈(bigram 4.16, trigram 6.93),user_freq 的 learn 在 keyboard 层、session 测试不涉及)。
+  实测:隔离 XDG 造 user_trigram.txt,`--ctx "我们 爱"` 让 shiji 首位 世纪→实际,次序颠倒不触发。
+
 ## 风险
 
 - **niri 生态兼容**：im-v2 为较新协议，niri 实现可能有 bug（候选窗位置、虚拟键盘重置 XKB 布局组等已知 issue）；应对：直接改 niri 提 PR。
@@ -132,7 +144,7 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
   `xprop -root XIM_SERVERS` = @server=fcitx、glyph 独占 im-v2 activate。ibus/dbus 前端保留(X11 Electron 用)
 - [x] ~~M4:niri im-v2/vkb 已知问题修复 + 上游 PR~~(2026-08-28 决定不做,项目收尾)
 
-## 后续候选功能(2026-08-28 整理;用户造词、以词定字已落地,见上)
+## 后续候选功能(2026-08-28 整理;用户造词、以词定字、整句级学习已落地,见上)
 
 现状基线:全项目 3520 行 / 25 个 rs 文件,距 10k 行预算余量 ~6500。规模列为粗略行数估计。
 
@@ -141,7 +153,6 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 | 功能 | 说明 | 实现要点 | 规模 |
 |---|---|---|---|
 | 删词/降权 | Ctrl+数字 拉黑垃圾候选(rime 合并后 139 万词库有噪声;与造词构成一学一删闭环) | user_blacklist.txt,convert 输出前过滤 | ~80 行 |
-| 整句级学习 | bigram→trigram,上下文窗口加长 | 不改已定案的 BIGRAM_W 调校,纯加一层;收益需实测 | ~100 行 |
 
 ### 二档:手感补全(主流输入法标配)
 

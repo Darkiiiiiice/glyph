@@ -22,7 +22,7 @@ fn main() -> ExitCode {
             },
             "--chars" => char_mode = true, // Tab 单字模式:第一音节单字候选
             "--ctx" => match args.next() {
-                Some(w) => ctx = Some(w), // 上文(bigram):候选首词与其有搭配记录时上浮
+                Some(w) => ctx = Some(w), // 上文:空格分隔多词(自然语序,旧→新);bigram 用末词,trigram 用末两词
                 None => return usage(),
             },
             _ => return usage(),
@@ -45,6 +45,14 @@ fn main() -> ExitCode {
             }
         }
     }
+    // 加载用户 trigram(与 bigram 同目录派生 user_trigram.txt),供 --ctx 双词上文排序
+    if let Some(tp) = bigram_path().map(|p| p.with_file_name("user_trigram.txt")) {
+        if let Ok(map) = Engine::load_trigram(&tp) {
+            if !map.is_empty() {
+                engine.set_user_trigram(map);
+            }
+        }
+    }
     // 用户造词 overlay(与 bigram 同目录派生 user_dict.txt)
     if let Some(dp) = bigram_path().map(|p| p.with_file_name("user_dict.txt")) {
         let _ = engine.load_user_dict(&dp);
@@ -62,7 +70,9 @@ fn main() -> ExitCode {
         if input.is_empty() {
             continue;
         }
-        let cands = if char_mode { engine.first_syllable_chars(&input, 9) } else { engine.convert_ctx(&input, 9, ctx.as_deref()) };
+        // ctx 转成最近优先切片(用户按自然语序给词,反转后 ctx[0]=末词=最近一次)
+        let ctx_words: Vec<&str> = ctx.as_deref().map(|c| c.split_whitespace().rev().collect()).unwrap_or_default();
+        let cands = if char_mode { engine.first_syllable_chars(&input, 9) } else { engine.convert_ctx(&input, 9, &ctx_words) };
         if cands.is_empty() {
             writeln!(out, "{input} -> (无候选)").ok();
             continue;
@@ -80,7 +90,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("用法: glyph-cli [--lexicon <路径>] [--chars] [--ctx <上文>] < 拼音串");
+    eprintln!("用法: glyph-cli [--lexicon <路径>] [--chars] [--ctx <上文...>] < 拼音串");
     ExitCode::FAILURE
 }
 

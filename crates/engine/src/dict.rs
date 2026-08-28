@@ -83,6 +83,9 @@ pub struct Lexicon {
     /// 用户二元搭配(bigram):上一次上屏的尾词 → {当前词 → 搭配次数}。
     /// 冷启动从用户输入历史积累,无外部语料;嵌套 map 使查询免 tuple 分配。
     pub user_bigram: HashMap<String, HashMap<String, u32>>,
+    /// 用户三元搭配(trigram):上上文 → {上文 → {当前词 → 搭配次数}}。
+    /// 双词上下文比单词更特异,与 bigram 并行积累、查询时取两者增量 max(见 segment)。
+    pub user_trigram: HashMap<String, HashMap<String, HashMap<String, u32>>>,
     /// 用户造词 overlay(逐字序列学成的词):运行期可插,与池化 trie 并查。
     pub(crate) user_words: UserDict,
 }

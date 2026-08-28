@@ -4,8 +4,10 @@
 use glyph_engine::{Candidate, Engine};
 
 mod coin;
+mod ctx;
 mod punct;
 use coin::Coining;
+use ctx::Ctx;
 use punct::{is_punct_key, is_modifier};
 
 /// 一次按键的处理结果。
@@ -41,8 +43,8 @@ pub struct Session {
     shift_used: bool,
     /// Tab 单字模式:true = 候选窗显示首音节单字(逐字定字);false = 整句候选。
     char_mode: bool,
-    /// 上一次上屏的尾词(bigram 上文);跨组字保留,clear 不清。
-    prev_word: Option<String>,
+    /// 上屏历史(最近两个尾词,bigram/trigram 上文);跨组字保留,clear 不清。
+    ctx: Ctx,
     /// 逐字造词链(见 coin.rs):char_mode 连续单字上屏,选完结算成用户词。
     coin: Coining,
 }
@@ -50,7 +52,7 @@ pub struct Session {
 impl Session {
     pub fn new(punct_cn: bool, page_size: usize) -> Self {
         let page_size = page_size.clamp(1, 20);
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, page_size, pool: page_size * 10, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false, prev_word: None, coin: Coining::default() }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, page_size, pool: page_size * 10, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false, ctx: Ctx::default(), coin: Coining::default() }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {
@@ -209,7 +211,7 @@ impl Session {
         } else if self.char_mode {
             engine.first_syllable_chars(&self.buffer, self.pool)
         } else {
-            engine.convert_ctx(&self.buffer, self.pool, self.prev_word.as_deref())
+            engine.convert_ctx(&self.buffer, self.pool, &self.ctx.words())
         };
         self.page = 0;
     }
@@ -225,15 +227,10 @@ impl Session {
     /// 选中候选:上屏 text;若候选只消耗前缀拼音(首词/逐字选择),截掉已消耗
     /// 部分、剩余拼音重新转换继续组字;否则(整句/无剩余)清空。
     fn pick(&mut self, engine: &mut Engine, text: String, consumed: usize) -> Reply {
-        // bigram:上一次上屏尾词 → 本次首词。在 candidates 变化(clear/refresh)前取选中候选的分词。
+        // bigram/trigram 搭配学习 + 上屏历史滑动;在 candidates 变化(clear/refresh)前取选中候选的分词。
         let words = self.candidates.iter().find(|c| c.text == text && c.consumed == consumed).map(|c| c.words.clone());
-        if let Some(words) = words {
-            if let (Some(prev), Some(first)) = (self.prev_word.as_deref(), words.first()) {
-                engine.learn_bigram(prev, first);
-            }
-            if let Some(last) = words.last() {
-                self.prev_word = Some(last.clone());
-            }
+        if let Some(words) = &words {
+            self.ctx.learn_commit(engine, words);
         }
         // 单字模式部分上屏(有剩余拼音)时保持单字模式,连续逐字选下一字;选完走 clear 退出。
         let total = self.buffer.bytes().filter(|&b| b != b'\'').count();
@@ -279,9 +276,9 @@ impl Session {
         let text = ch.to_string();
         let consumed = c.consumed;
         let r = self.pick(engine, text.clone(), consumed);
-        // pick 按 (text,consumed) 找整词候选更新 bigram 尾词;定字上屏的单字找不到匹配,
-        // 手动把上屏字记为 prev_word,供下一句的 bigram 上文。
-        self.prev_word = Some(text);
+        // pick 按 (text,consumed) 找整词候选学搭配;定字上屏的单字找不到匹配,
+        // 手动把上屏字推入上屏历史,供下一句的 bigram/trigram 上文。
+        self.ctx.push(text);
         r
     }
     /// 当前页候选(候选窗渲染的数据源)。

@@ -160,6 +160,11 @@ fn on_key(state: &mut State, time: u32, key: u32, st: WEnum<wl_keyboard::KeyStat
             if let Err(e) = state.engine.save_bigram(&bigram_path) {
                 log::warn!("用户 bigram 落盘失败: {e}");
             }
+            // trigram 双词搭配落盘(同目录派生 user_trigram.txt)
+            let trigram_path = state.user_freq_path.with_file_name("user_trigram.txt");
+            if let Err(e) = state.engine.save_trigram(&trigram_path) {
+                log::warn!("用户 trigram 落盘失败: {e}");
+            }
             // 用户造词落盘(随 commit 全量写,与 user_freq/bigram 一致)
             let dict_path = state.user_freq_path.with_file_name("user_dict.txt");
             if let Err(e) = state.engine.save_user_dict(&dict_path) {

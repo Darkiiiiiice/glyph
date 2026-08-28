@@ -14,7 +14,7 @@ fn bracket_picks_first_and_last_char() {
     let r = s.on_keysym(&mut e, K::KEY_bracketleft);
     assert_eq!(r.commit.as_deref(), Some("你"), "`[` 取首字");
     assert!(r.consumed && !s.composing());
-    assert_eq!(s.prev_word.as_deref(), Some("你"), "上屏字记为 bigram 上文");
+    assert_eq!(s.ctx.prev1(), Some("你"), "上屏字记为上屏历史(bigram 上文)");
     for ch in "nihao".chars() {
         s.on_keysym(&mut e, ch as u32);
     }

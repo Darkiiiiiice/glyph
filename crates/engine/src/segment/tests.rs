@@ -136,7 +136,7 @@ fn bigram_narrow_gap_flips_once_and_recovers() {
     // 窄 gap(世纪 21100 vs 实际 12010,ln gap≈0.56):1 次搭配即翻盘,对称各 1 次恢复静态序。
     // "一次即学"是刻意行为(与 USER_W 同量纲);翻转只在相邻名次间,两词始终前二可见。
     let mut lex = Lexicon::from_lines("wo'men 我们 9000\nshi'ji 世纪 21100\nshi'ji 实际 12010\n");
-    let prev = Some("我们");
+    let prev = &["我们"][..];
     assert_eq!(convert_ctx(&lex, "shiji", 9, prev)[0].text, "世纪");
     lex.user_bigram.entry("我们".to_string()).or_default().insert("实际".to_string(), 1);
     assert_eq!(convert_ctx(&lex, "shiji", 9, prev)[0].text, "实际", "1 次搭配应翻窄 gap");
@@ -149,7 +149,7 @@ fn bigram_wide_gap_requires_dominant_usage() {
     // 宽 gap(探索 2653 vs 坍缩 3,ln gap≈6.78):交替使用(7:6)永不翻盘,独占 3 次才翻。
     // 交替 = 上下文无区分度,bigram 正确弃权给静态先验;宽 gap 从不抖动。
     let mut lex = Lexicon::from_lines("wo'men 我们 9000\ntan'suo 探索 2653\ntan'suo 坍缩 3\n");
-    let prev = Some("我们");
+    let prev = &["我们"][..];
     let m = lex.user_bigram.entry("我们".to_string()).or_default();
     m.insert("坍缩".to_string(), 7);
     m.insert("探索".to_string(), 6);
@@ -166,4 +166,35 @@ fn bigram_wide_gap_requires_dominant_usage() {
     assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "探索", "5:1 仍不够");
     lex.user_bigram.get_mut("我们").unwrap().insert("坍缩".to_string(), 6);
     assert_eq!(convert_ctx(&lex, "tansuo", 9, prev)[0].text, "坍缩", "6:1 应再翻盘");
+}
+
+#[test]
+fn trigram_flips_p99_gap_with_one_collocation() {
+    // 双词上下文是强证据:1 次搭配翻 p99 级 gap(ln665≈6.50;10·ln2≈6.93 压过)。
+    let mut lex = Lexicon::from_lines("wo'men 我们 9000\nai 爱 8000\nzhong'wen 中文 6650\nzhong'wen 种蚊 10\n");
+    assert_eq!(convert_ctx(&lex, "zhongwen", 9, &["爱", "我们"])[0].text, "中文");
+    lex.user_trigram.entry("我们".to_string()).or_default().entry("爱".to_string()).or_default().insert("种蚊".to_string(), 1);
+    assert_eq!(convert_ctx(&lex, "zhongwen", 9, &["爱", "我们"])[0].text, "种蚊", "1 次双词搭配应翻 6.5 gap");
+}
+
+#[test]
+fn trigram_requires_both_context_words() {
+    // 只有 (上上文, 上一词) 全中才触发:缺一词、次序颠倒、上上文不符都回落静态序。
+    let mut lex = Lexicon::from_lines("wo'men 我们 9000\nai 爱 8000\nzhong'wen 中文 6650\nzhong'wen 种蚊 10\n");
+    lex.user_trigram.entry("我们".to_string()).or_default().entry("爱".to_string()).or_default().insert("种蚊".to_string(), 1);
+    assert_eq!(convert_ctx(&lex, "zhongwen", 9, &["爱"])[0].text, "中文", "只有单词上文不触发");
+    assert_eq!(convert_ctx(&lex, "zhongwen", 9, &["爱", "他们"])[0].text, "中文", "上上文不符不触发");
+    assert_eq!(convert_ctx(&lex, "zhongwen", 9, &["我们", "爱"])[0].text, "中文", "次序颠倒不触发");
+}
+
+#[test]
+fn trigram_and_bigram_take_max_not_sum() {
+    // 一次上屏同时写 bigram+trigram 两条记录:相加(4.16+6.93=11.1)会翻 gap 9,
+    // max(=6.93) 不翻——静态锚保持即证明无双记;高 count bigram 强于 1 次 trigram 时 max 不丢强证据。
+    let mut lex = Lexicon::from_lines("wo'men 我们 9000\nai 爱 8000\nmu'di 目的 810000\nmu'di 墓地 100\n");
+    lex.user_bigram.entry("爱".to_string()).or_default().insert("墓地".to_string(), 1);
+    lex.user_trigram.entry("我们".to_string()).or_default().entry("爱".to_string()).or_default().insert("墓地".to_string(), 1);
+    assert_eq!(convert_ctx(&lex, "mudi", 9, &["爱", "我们"])[0].text, "目的", "max(4.16,6.93)=6.93 < gap 9,应不翻");
+    lex.user_bigram.get_mut("爱").unwrap().insert("墓地".to_string(), 20);
+    assert_eq!(convert_ctx(&lex, "mudi", 9, &["爱", "我们"])[0].text, "墓地", "bigram 20 次(18.3)胜过 trigram 1 次(6.93)");
 }

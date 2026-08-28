@@ -32,11 +32,12 @@ const BEAM: usize = 100;
 const EDGE_WORD_CAP: usize = 32;
 
 pub fn convert(lex: &Lexicon, input: &str, limit: usize) -> Vec<Candidate> {
-    convert_ctx(lex, input, limit, None)
+    convert_ctx(lex, input, limit, &[])
 }
 
-/// 带上文(bigram)的转换:`prev` 是上一次上屏的尾词;候选首词与其有用户搭配记录时额外上浮。
-pub fn convert_ctx(lex: &Lexicon, input: &str, limit: usize, prev: Option<&str>) -> Vec<Candidate> {
+/// 带上文的转换:`ctx` 最近优先(ctx[0]=上一次上屏尾词、ctx[1]=上上次);候选首词与上文
+/// 有用户搭配记录时上浮:bigram 用 ctx[0],trigram 用 ctx[..2](双词更特异,见 TRIGRAM_W)。
+pub fn convert_ctx(lex: &Lexicon, input: &str, limit: usize, ctx: &[&str]) -> Vec<Candidate> {
     let lattice = syllable::build_lattice(input, &lex.syllables);
     let len = lattice.text.len();
     if len == 0 {
@@ -112,18 +113,21 @@ pub fn convert_ctx(lex: &Lexicon, input: &str, limit: usize, prev: Option<&str>)
     let mut seen = HashSet::new();
     cands.retain(|c| seen.insert(c.text.clone()));
 
-    // 排序:静态 score + 用户调频增量 + bigram 上文增量(无数据时增量 ln(1)=0)。
+    // 排序:静态 score + 用户调频增量 + 上下文增量(无数据时增量 ln(1)=0)。
+    // 上下文取 bigram/trigram 增量 max 而非相加:同一次上屏会同时写两条记录,
+    // 相加等于把一份证据记两次;max 保留各自独立积累中更强者。
     // score 字段保持原始对数概率不被污染,只影响次序。
+    let bigram_map = ctx.first().and_then(|p| lex.user_bigram.get(*p));
+    let trigram_map = if ctx.len() >= 2 { lex.user_trigram.get(ctx[1]).and_then(|m| m.get(ctx[0])) } else { None };
     let mut ranked: Vec<(f64, Candidate)> = cands
         .into_iter()
         .map(|c| {
             let boost = lex.user_freq.get(&c.text).copied().unwrap_or(0);
-            let bigram = prev
-                .and_then(|p| lex.user_bigram.get(p))
-                .and_then(|m| c.words.first().and_then(|w| m.get(w.as_str())))
-                .copied()
-                .unwrap_or(0);
-            (c.score + (1.0 + boost as f64).ln() * USER_W + (1.0 + bigram as f64).ln() * BIGRAM_W, c)
+            let first = c.words.first().map(|w| w.as_str());
+            let bi = bigram_map.and_then(|m| first.and_then(|w| m.get(w))).copied().unwrap_or(0);
+            let tri = trigram_map.and_then(|m| first.and_then(|w| m.get(w))).copied().unwrap_or(0);
+            let ctx_boost = ((1.0 + bi as f64).ln() * BIGRAM_W).max((1.0 + tri as f64).ln() * TRIGRAM_W);
+            (c.score + (1.0 + boost as f64).ln() * USER_W + ctx_boost, c)
         })
         .collect();
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -247,6 +251,10 @@ const USER_W: f64 = 6.0;
 /// bigram 上文搭配权重:候选首词与上一次上屏尾词的用户搭配次数的对数增量。
 /// 冷启动积累,与 USER_W 同量纲——搭配几次即可压过纯词频序,且被 ln 压顶避免霸榜。
 const BIGRAM_W: f64 = 6.0;
+
+/// trigram 双词上文搭配权重:候选首词与(上上文,上一词)的用户搭配次数的对数增量。
+/// 双词上下文比单词更特异:1 次搭配应翻 p99 静态 gap(6.78),10·ln2≈6.93 恰好压过。
+const TRIGRAM_W: f64 = 10.0;
 
 #[cfg(test)]
 mod tests;

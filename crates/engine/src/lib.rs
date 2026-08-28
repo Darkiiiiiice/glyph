@@ -38,9 +38,10 @@ impl Engine {
         segment::convert(&self.lexicon, input, limit)
     }
 
-    /// 带上文(bigram)的转换:`prev` 是上一次上屏的尾词,候选首词与其有搭配记录时上浮。
-    pub fn convert_ctx(&self, input: &str, limit: usize, prev: Option<&str>) -> Vec<Candidate> {
-        segment::convert_ctx(&self.lexicon, input, limit, prev)
+    /// 带上文的转换:`ctx` 最近优先(ctx[0]=上一次上屏尾词,ctx[1]=上上次);
+    /// 候选首词与上文有搭配记录时上浮(bigram 用 ctx[0],trigram 用 ctx[..2])。
+    pub fn convert_ctx(&self, input: &str, limit: usize, ctx: &[&str]) -> Vec<Candidate> {
+        segment::convert_ctx(&self.lexicon, input, limit, ctx)
     }
 
     /// Tab 单字模式:第一音节的全部单字候选(见 segment::first_syllable_chars)。
@@ -62,6 +63,11 @@ impl Engine {
     /// 记录一次上文搭配:prev(上一次上屏尾词) → cur(本次上屏的首词),次数 +1。
     pub fn learn_bigram(&mut self, prev: &str, cur: &str) {
         *self.lexicon.user_bigram.entry(prev.to_string()).or_default().entry(cur.to_string()).or_insert(0) += 1;
+    }
+
+    /// 记录一次双词上文搭配:(上上文 prev2, 上文 prev1) → cur(本次上屏首词),次数 +1。
+    pub fn learn_trigram(&mut self, prev2: &str, prev1: &str, cur: &str) {
+        *self.lexicon.user_trigram.entry(prev2.to_string()).or_default().entry(prev1.to_string()).or_default().entry(cur.to_string()).or_insert(0) += 1;
     }
 
     /// 已学到的用户词频（文本 → 次数）。
@@ -187,6 +193,45 @@ impl Engine {
             curs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
             for (cur, count) in curs {
                 out.push_str(&format!("{prev} {cur} {count}\n"));
+            }
+        }
+        std::fs::write(path, out)
+    }
+
+    /// 从用户 trigram 文件加载(`上上文 上文 当前词 次数` 行);文件不存在时为空。
+    pub fn load_trigram(path: &Path) -> io::Result<std::collections::HashMap<String, std::collections::HashMap<String, std::collections::HashMap<String, u32>>>> {
+        let mut map: std::collections::HashMap<String, std::collections::HashMap<String, std::collections::HashMap<String, u32>>> = std::collections::HashMap::new();
+        for (lineno, line) in io::BufReader::new(std::fs::File::open(path)?).lines().enumerate() {
+            let line = line?;
+            let mut fields = line.split_whitespace();
+            let (Some(prev2), Some(prev1), Some(cur), Some(count)) = (fields.next(), fields.next(), fields.next(), fields.next()) else {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{}:{}: 缺 上上文/上文/当前词/次数 列", path.display(), lineno + 1)));
+            };
+            let count: u32 = count.parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("{}:{}: 次数非整数", path.display(), lineno + 1)))?;
+            map.entry(prev2.to_string()).or_default().entry(prev1.to_string()).or_default().insert(cur.to_string(), count);
+        }
+        Ok(map)
+    }
+
+    /// 把用户 trigram 合并进引擎(供启动时加载)。
+    pub fn set_user_trigram(&mut self, map: std::collections::HashMap<String, std::collections::HashMap<String, std::collections::HashMap<String, u32>>>) {
+        self.lexicon.user_trigram = map;
+    }
+
+    /// 把 user_trigram 写盘(`上上文 上文 当前词 次数` 行,字典序 + 次数降序)。无数据时清空该文件。
+    pub fn save_trigram(&self, path: &Path) -> io::Result<()> {
+        let mut out = String::new();
+        let mut p2s: Vec<_> = self.lexicon.user_trigram.iter().collect();
+        p2s.sort_by(|a, b| a.0.cmp(b.0));
+        for (p2, m1) in p2s {
+            let mut p1s: Vec<_> = m1.iter().collect();
+            p1s.sort_by(|a, b| a.0.cmp(b.0));
+            for (p1, m) in p1s {
+                let mut curs: Vec<_> = m.iter().collect();
+                curs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+                for (cur, count) in curs {
+                    out.push_str(&format!("{p2} {p1} {cur} {count}\n"));
+                }
             }
         }
         std::fs::write(path, out)
