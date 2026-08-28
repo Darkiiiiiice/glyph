@@ -86,6 +86,9 @@ pub struct Lexicon {
     /// 用户三元搭配(trigram):上上文 → {上文 → {当前词 → 搭配次数}}。
     /// 双词上下文比单词更特异,与 bigram 并行积累、查询时取两者增量 max(见 segment)。
     pub user_trigram: HashMap<String, HashMap<String, HashMap<String, u32>>>,
+    /// 模糊音等价类:音节编号 → 等价音节集(含自身,有序)。默认空表 = 精确匹配;
+    /// set_fuzzy 后填满(未受影响音节为自身单元素),for_each_word_edge 逐枚子边。
+    fuzzy: Vec<Vec<SyllId>>,
     /// 用户造词 overlay(逐字序列学成的词):运行期可插,与池化 trie 并查。
     pub(crate) user_words: UserDict,
 }
@@ -125,6 +128,56 @@ impl Lexicon {
     /// 音节串 → 编号(用户造词的词库查重用;不在音节表 = 永远切不出候选)。
     pub(crate) fn syllable_id(&self, syll: &str) -> Option<SyllId> {
         self.syllable_ids.get(syll).copied()
+    }
+
+    /// 把模糊音规则对展开成音节等价类。规则是声母("z"/"zh")或韵母("an"/"ang")
+    /// 片段,前缀/后缀替换双向应用(z↔zh 互找、an↔ang 互找),再取传递闭包
+    /// (z=zh + an=ang 时 zan↔zhan↔zang↔zhang 一类)。空片段/音节表外的规则静默忽略。
+    /// 等价无惩罚:模糊命中与精确命中同权,按词频竞争(与主流输入法一致)。
+    pub(crate) fn set_fuzzy(&mut self, rules: &[(&str, &str)]) {
+        let n = self.syllable_strs.len();
+        self.fuzzy = (0..n).map(|i| vec![i as SyllId]).collect();
+        // 规则 → 音节伙伴边
+        let mut partners: Vec<HashSet<SyllId>> = vec![HashSet::new(); n];
+        for &(a, b) in rules {
+            if a.is_empty() || b.is_empty() {
+                continue;
+            }
+            for (s, &id) in &self.syllable_ids {
+                for (from, to) in [(a, b), (b, a)] {
+                    if let Some(t) = replace_affix(s, from, to) {
+                        if let Some(&tid) = self.syllable_ids.get(&t) {
+                            partners[id as usize].insert(tid);
+                        }
+                    }
+                }
+            }
+        }
+        // 洪泛求连通分量,>1 的分量写成等价类(每成员映射到整类)
+        let mut done = vec![false; n];
+        for i in 0..n {
+            if done[i] {
+                continue;
+            }
+            let mut class = vec![i as SyllId];
+            let mut stack = vec![i];
+            done[i] = true;
+            while let Some(x) = stack.pop() {
+                for &p in &partners[x] {
+                    if !done[p as usize] {
+                        done[p as usize] = true;
+                        class.push(p);
+                        stack.push(p as usize);
+                    }
+                }
+            }
+            if class.len() > 1 {
+                class.sort_unstable();
+                for &m in &class {
+                    self.fuzzy[m as usize] = class.clone();
+                }
+            }
+        }
     }
 
     /// 节点的子节点(按音节编号二分)。
@@ -183,15 +236,28 @@ impl Lexicon {
                     let Some(&id) = self.syllable_ids.get(&lattice.text[a..b]) else {
                         continue;
                     };
-                    if let Some(ci) = self.child(ni, id) {
-                        if self.nodes[ci as usize].word_len > 0 {
-                            f(start, b, self.word_edges(ci));
+                    // 模糊音:等价类(含自身)逐枚走子边;空表 = 仅自身(精确匹配)
+                    let ids = self.fuzzy.get(id as usize).map_or(std::slice::from_ref(&id), Vec::as_slice);
+                    for &fid in ids {
+                        if let Some(ci) = self.child(ni, fid) {
+                            if self.nodes[ci as usize].word_len > 0 {
+                                f(start, b, self.word_edges(ci));
+                            }
+                            stack.push((ci, b));
                         }
-                        stack.push((ci, b));
                     }
                 }
             }
         }
+    }
+}
+
+/// 前/后缀替换:`s` 以 `from` 开头则换成 `to`(声母规则),否则以 `from` 结尾则换(韵母规则)。
+fn replace_affix(s: &str, from: &str, to: &str) -> Option<String> {
+    if let Some(rest) = s.strip_prefix(from) {
+        Some(format!("{to}{rest}"))
+    } else {
+        s.strip_suffix(from).map(|head| format!("{head}{to}"))
     }
 }
 

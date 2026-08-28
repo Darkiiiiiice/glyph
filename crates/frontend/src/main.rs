@@ -83,6 +83,11 @@ fn main() -> ExitCode {
         Err(e) => log::warn!("用户造词加载失败 {}: {e}(忽略,首次运行正常)", dp.display()),
     }
     let config = glyph_frontend::config::Config::load();
+    if !config.fuzzy.is_empty() {
+        let rules: Vec<(&str, &str)> = config.fuzzy.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        engine.set_fuzzy(&rules);
+        log::info!("模糊音 {} 组规则 ← config", rules.len());
+    }
     let (_conn, mut eq, mut state) = match globals::connect(engine, uf, config) {
         Ok(t) => t,
         Err(e) => {

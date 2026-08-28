@@ -49,6 +49,12 @@ impl Engine {
         segment::first_syllable_chars(&self.lexicon, input, limit)
     }
 
+    /// 设置模糊音规则对(声母 `"z"`/`"zh"`、韵母 `"an"`/`"ang"` 片段),双向、取传递闭包;
+    /// 不传/空 = 精确匹配(默认)。只影响全拼 DP 与单字模式;简拼/混合拼不受影响(本就模糊)。
+    pub fn set_fuzzy(&mut self, rules: &[(&str, &str)]) {
+        self.lexicon.set_fuzzy(rules);
+    }
+
     /// 记录一个被选择的候选文本：次数 +1，此后 convert 排序会上浮它。
     pub fn learn(&mut self, text: &str) {
         if let Some(h) = self.lexicon.user_freq.get_mut(text) {

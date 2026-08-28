@@ -13,6 +13,7 @@ fn main() -> ExitCode {
     let mut lexicon = env::var("GLYPH_LEXICON").unwrap_or_else(|_| "data/lexicon.txt".to_string());
     let mut char_mode = false;
     let mut ctx: Option<String> = None;
+    let mut fuzzy = String::new();
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -21,6 +22,10 @@ fn main() -> ExitCode {
                 None => return usage(),
             },
             "--chars" => char_mode = true, // Tab 单字模式:第一音节单字候选
+            "--fuzzy" => match args.next() {
+                Some(w) => fuzzy = w, // 模糊音规则:逗号分隔 片段:片段(如 z:zh,an:ang)
+                None => return usage(),
+            },
             "--ctx" => match args.next() {
                 Some(w) => ctx = Some(w), // 上文:空格分隔多词(自然语序,旧→新);bigram 用末词,trigram 用末两词
                 None => return usage(),
@@ -52,6 +57,11 @@ fn main() -> ExitCode {
                 engine.set_user_trigram(map);
             }
         }
+    }
+    // 模糊音规则(命令行显式给,默认精确匹配)
+    if !fuzzy.is_empty() {
+        let rules: Vec<(&str, &str)> = fuzzy.split(',').filter_map(|p| p.trim().split_once(':')).collect();
+        engine.set_fuzzy(&rules);
     }
     // 用户造词 overlay(与 bigram 同目录派生 user_dict.txt)
     if let Some(dp) = bigram_path().map(|p| p.with_file_name("user_dict.txt")) {
@@ -90,7 +100,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("用法: glyph-cli [--lexicon <路径>] [--chars] [--ctx <上文...>] < 拼音串");
+    eprintln!("用法: glyph-cli [--lexicon <路径>] [--chars] [--ctx <上文...>] [--fuzzy <z:zh,an:ang>] < 拼音串");
     ExitCode::FAILURE
 }
 

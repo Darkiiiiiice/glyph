@@ -14,11 +14,13 @@ pub struct Config {
     pub punct_cn: bool,
     /// 每页候选数(数字键 1-9 直选,>9 时超出数字键范围的只能翻页选中)。
     pub page_size: usize,
+    /// 模糊音规则对(如 z:zh、an:ang);空 = 精确匹配(默认关闭)。
+    pub fuzzy: Vec<(String, String)>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { style: Style::default(), punct_cn: true, page_size: 9 }
+        Self { style: Style::default(), punct_cn: true, page_size: 9, fuzzy: Vec::new() }
     }
 }
 
@@ -67,6 +69,7 @@ impl Config {
                     }
                 }
                 "font_path" => cfg.style.font_path = Some(v.trim().to_string()),
+                "fuzzy" => cfg.fuzzy = parse_fuzzy(v),
                 "bg" => set(&mut cfg.style.bg, v),
                 "fg" => set(&mut cfg.style.fg, v),
                 "pinyin_fg" => set(&mut cfg.style.pinyin_fg, v),
@@ -77,6 +80,15 @@ impl Config {
         }
         cfg
     }
+}
+
+/// 解析 `fuzzy = z:zh, an:ang` 为规则对;缺冒号/空片段的项静默跳过(配置哲学:坏行回退)。
+fn parse_fuzzy(v: &str) -> Vec<(String, String)> {
+    v.split(',')
+        .filter_map(|p| p.trim().split_once(':'))
+        .map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))
+        .filter(|(a, b)| !a.is_empty() && !b.is_empty())
+        .collect()
 }
 
 /// 把 `RRGGBB`/`AARRGGBB`(可带 `0x`/`#` 前缀)写入颜色字段;RRGGBB 补全 alpha=ff。
@@ -101,6 +113,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&xdg);
         assert_eq!(cfg.style.bg, 0xffff2a6d, "行尾注释应被剥离");
         assert_eq!(cfg.style.fg, 0xff00f0ff, "# 前缀颜色应保留");
+    }
+
+    #[test]
+    fn fuzzy_pairs_parse() {
+        assert_eq!(
+            super::parse_fuzzy("z:zh, an:ang"),
+            [("z".to_string(), "zh".to_string()), ("an".to_string(), "ang".to_string())]
+        );
+        assert!(super::parse_fuzzy("z, :zh, a:").is_empty(), "缺冒号/空片段的项应跳过");
     }
 
     #[test]

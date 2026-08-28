@@ -139,6 +139,7 @@ impl Builder {
             paths,
             user_bigram: HashMap::new(),
             user_trigram: HashMap::new(),
+            fuzzy: Vec::new(),
             user_words: crate::user_dict::UserDict::default(),
         }
     }

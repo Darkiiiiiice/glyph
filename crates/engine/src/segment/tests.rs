@@ -198,3 +198,41 @@ fn trigram_and_bigram_take_max_not_sum() {
     lex.user_bigram.get_mut("爱").unwrap().insert("墓地".to_string(), 20);
     assert_eq!(convert_ctx(&lex, "mudi", 9, &["爱", "我们"])[0].text, "墓地", "bigram 20 次(18.3)胜过 trigram 1 次(6.93)");
 }
+
+#[test]
+fn fuzzy_initial_pairs_expand_bidirectionally() {
+    // z=zh:打 zici 能出"支持"(zhi'chi),打 zhichi 能出"此次"(zi'ci)——双向等价。
+    let mut lex = Lexicon::from_lines("zhi'chi 支持 1000\nzi'ci 此次 500\n");
+    assert!(convert(&lex, "zici", 9).iter().all(|c| c.text != "支持"), "默认精确:zici 不出 支持");
+    lex.set_fuzzy(&[("z", "zh"), ("c", "ch")]);
+    assert!(convert(&lex, "zici", 9).iter().any(|c| c.text == "支持"), "z=zh 后 zici 应出 支持");
+    assert!(convert(&lex, "zhichi", 9).iter().any(|c| c.text == "此次"), "反向:zhichi 应出 此次");
+}
+
+#[test]
+fn fuzzy_final_pairs_expand_and_compete_by_freq() {
+    // an=ang 韵母:banzhu 模糊出 帮助(bang'zhu);模糊与精确同权,词频说了算(班主 2000>帮助 1000)。
+    let mut lex = Lexicon::from_lines("bang'zhu 帮助 1000\nban'zhu 班主 2000\n");
+    lex.set_fuzzy(&[("an", "ang")]);
+    let cands = convert(&lex, "banzhu", 9);
+    let texts: Vec<_> = cands.iter().map(|c| c.text.as_str()).collect();
+    assert!(texts.contains(&"帮助"), "an=ang 后 banzhu 应出 帮助");
+    assert_eq!(texts[0], "班主", "同权竞争:精确命中词频高者仍第一");
+}
+
+#[test]
+fn fuzzy_rules_compose_transitively() {
+    // z=zh + an=ang 传递闭包:zan 与 zhang 同属一类(经 zhan/zang)。
+    let mut lex = Lexicon::from_lines("zhang 张 1000\nzan 赞 500\nzhan 站 800\nzang 脏 300\n");
+    lex.set_fuzzy(&[("z", "zh"), ("an", "ang")]);
+    assert!(convert(&lex, "zan", 9).iter().any(|c| c.text == "张"), "zan 应模糊出 张(zhang)");
+}
+
+#[test]
+fn fuzzy_ignores_invalid_rules() {
+    // 音节表无交集/空片段的规则静默忽略,不影响精确匹配。
+    let mut lex = Lexicon::from_lines("zi'ci 此次 500\n");
+    lex.set_fuzzy(&[("x", "q"), ("", "z"), ("w", "")]);
+    assert!(convert(&lex, "xici", 9).is_empty(), "无交集规则不应造出候选");
+    assert_eq!(convert(&lex, "zici", 9)[0].text, "此次", "精确路径不受影响");
+}

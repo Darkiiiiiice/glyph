@@ -128,6 +128,18 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
   (gap 隔离:5.50∈(bigram 4.16, trigram 6.93),user_freq 的 learn 在 keyboard 层、session 测试不涉及)。
   实测:隔离 XDG 造 user_trigram.txt,`--ctx "我们 爱"` 让 shiji 首位 世纪→实际,次序颠倒不触发。
 
+### 模糊音(z/zh、an/ang 等价类) ✅(2026-08-28)
+- **行为**:config.conf `fuzzy = z:zh, c:ch, s:sh, n:l, an:ang`(逗号分隔片段对,默认关)。
+  规则按音节表前/后缀替换双向展开再取传递闭包(z=zh + an=ang → zan↔zhan↔zang↔zhang 一类);
+  等价无惩罚,模糊命中与精确命中同权按词频竞争(与主流输入法一致)。打对的用户会看到同音噪声,是预期行为。
+- **实现**:扩展点在 dict.rs for_each_word_edge 的音节串→编号解析处,等价类逐枚走 trie 子边;
+  全拼 DP 与 Tab 单字模式同路自动生效。简拼/混合拼不受影响(本就模糊);用户造词 overlay 不展开(边界)。
+  空表 = 零开销精确匹配(热路径仅多一次 get 分支)。
+- **排障**:契约测试两连败均为 fixture 问题——声母对独立(z=zh 不含 ci↔chi,需同配 c=ch);
+  传递闭包要求中间音节在音节表内(zan↔zhang 需 zhan/zang 有词条),小 fixture 要补齐。
+- **测试**:引擎 4(双向声母/韵母同权词频/传递闭包/非法规则忽略)+ config 解析 1。
+  实测:--fuzzy "z:zh,c:ch" 下 zici 首位 支持;--fuzzy in:ing 下 binqi 首位 兵器;默认精确不变。
+
 ## 风险
 
 - **niri 生态兼容**：im-v2 为较新协议，niri 实现可能有 bug（候选窗位置、虚拟键盘重置 XKB 布局组等已知 issue）；应对：直接改 niri 提 PR。
@@ -144,7 +156,7 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
   `xprop -root XIM_SERVERS` = @server=fcitx、glyph 独占 im-v2 activate。ibus/dbus 前端保留(X11 Electron 用)
 - [x] ~~M4:niri im-v2/vkb 已知问题修复 + 上游 PR~~(2026-08-28 决定不做,项目收尾)
 
-## 后续候选功能(2026-08-28 整理;用户造词、以词定字、整句级学习已落地,见上)
+## 后续候选功能(2026-08-28 整理;用户造词、以词定字、整句级学习、模糊音已落地,见上)
 
 现状基线:全项目 3520 行 / 25 个 rs 文件,距 10k 行预算余量 ~6500。规模列为粗略行数估计。
 
@@ -152,7 +164,6 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 
 | 功能 | 说明 | 实现要点 | 规模 |
 |---|---|---|---|
-| 模糊音 | z/zh、n/l、an/ang 等价类 | segment 层音节展开 + config [fuzzy] 开关 | ~200 行 |
 | Emoji 候选 | kaixin→😄、aixin→❤️ | 额外词表挂 trie(Unicode 数据许可兼容) | ~100 行 |
 | 中英混输 | 原始拼音串作末位候选直接上屏,不用 Shift 切英文 | session 加一条候选 | ~80 行 |
 | 自定义短语 | user_phrases.txt:邮箱/签名/常用句,高优先级 | 启动加载,convert 头部注入 | ~60 行 |
@@ -172,4 +183,4 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 
 ### 推荐组合(若重启)
 
-模糊音(唯一影响"打不出来"的功能) + 日期时间当甜点。
+日期时间/计算器当甜点;二档剩 Emoji、中英混输、自定义短语。
