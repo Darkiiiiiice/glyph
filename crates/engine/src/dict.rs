@@ -20,6 +20,7 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
 use crate::syllable::Lattice;
+use crate::user_dict::UserDict;
 
 mod build;
 
@@ -82,6 +83,8 @@ pub struct Lexicon {
     /// 用户二元搭配(bigram):上一次上屏的尾词 → {当前词 → 搭配次数}。
     /// 冷启动从用户输入历史积累,无外部语料;嵌套 map 使查询免 tuple 分配。
     pub user_bigram: HashMap<String, HashMap<String, u32>>,
+    /// 用户造词 overlay(逐字序列学成的词):运行期可插,与池化 trie 并查。
+    pub(crate) user_words: UserDict,
 }
 
 impl Lexicon {
@@ -114,6 +117,11 @@ impl Lexicon {
     /// 编号 → 音节串。
     pub(crate) fn syll_str(&self, id: SyllId) -> &str {
         &self.syllable_strs[id as usize]
+    }
+
+    /// 音节串 → 编号(用户造词的词库查重用;不在音节表 = 永远切不出候选)。
+    pub(crate) fn syllable_id(&self, syll: &str) -> Option<SyllId> {
+        self.syllable_ids.get(syll).copied()
     }
 
     /// 节点的子节点(按音节编号二分)。

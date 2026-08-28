@@ -65,6 +65,13 @@ fn main() -> ExitCode {
         Ok(_) => {}
         Err(e) => log::warn!("用户 bigram 加载失败 {}: {e}(忽略,首次运行正常)", bp.display()),
     }
+    // 用户造词 overlay 加载(与 user_freq 同目录派生路径 user_dict.txt)
+    let dp = uf.with_file_name("user_dict.txt");
+    match engine.load_user_dict(&dp) {
+        Ok(n) if n > 0 => log::info!("用户造词 {n} 条 ← {}", dp.display()),
+        Ok(_) => {}
+        Err(e) => log::warn!("用户造词加载失败 {}: {e}(忽略,首次运行正常)", dp.display()),
+    }
     let config = glyph_frontend::config::Config::load();
     let (_conn, mut eq, mut state) = match globals::connect(engine, uf, config) {
         Ok(t) => t,

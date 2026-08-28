@@ -45,6 +45,10 @@ fn main() -> ExitCode {
             }
         }
     }
+    // 用户造词 overlay(与 bigram 同目录派生 user_dict.txt)
+    if let Some(dp) = bigram_path().map(|p| p.with_file_name("user_dict.txt")) {
+        let _ = engine.load_user_dict(&dp);
+    }
 
     let stdin = io::stdin();
     let stdout = io::stdout();

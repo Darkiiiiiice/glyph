@@ -50,6 +50,10 @@ pub fn convert_ctx(lex: &Lexicon, input: &str, limit: usize, prev: Option<&str>)
             incoming[end].push((start, word, freq));
         }
     });
+    // 用户造词 overlay:词边同桶进 DP(量级千级,不过 EDGE_WORD_CAP)。
+    lex.user_words.for_each_edge(&lattice, |start, end, word, freq| {
+        incoming[end].push((start, word, freq));
+    });
 
     // 前向 DP：dp[pos] = 以字节 pos 结尾的最佳若干（得分, 词路径）。
     let total = lex.total_freq as f64;

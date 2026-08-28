@@ -8,6 +8,7 @@
 mod dict;
 mod segment;
 mod syllable;
+mod user_dict;
 
 use std::io;
 use std::io::BufRead;
@@ -127,6 +128,55 @@ impl Engine {
         self.lexicon.user_bigram = map;
     }
 
+    /// 用户造词:逐字序列学成一个新词,进运行期 overlay(不动池化 trie)。
+    /// 词库已有同路径同文本词时不进 overlay(防膨胀,该词靠 user_freq 上浮),返回 false。
+    /// 音节不在词库音节表中 = 该拼音永远切不出候选,插入无意义,返回 false(防御)。
+    pub fn add_user_word(&mut self, syllables: &[&str], text: &str) -> bool {
+        if syllables.is_empty() || text.is_empty() {
+            return false;
+        }
+        let ids: Option<Vec<dict::SyllId>> =
+            syllables.iter().map(|s| self.lexicon.syllable_id(s)).collect();
+        let Some(ids) = ids else { return false };
+        if self
+            .lexicon
+            .words_at_path(&ids)
+            .is_some_and(|ws| ws.iter().any(|(w, _)| w == text))
+        {
+            return false;
+        }
+        self.lexicon.user_words.insert(syllables, text)
+    }
+
+    /// 从用户造词文件加载(`pin'yin 词 词频` 行,与 lexicon 同格式;词频列忽略,
+    /// overlay 统一用 USER_WORD_FREQ)。逐条过 add_user_dict 的词库查重。
+    pub fn load_user_dict(&mut self, path: &Path) -> io::Result<usize> {
+        let mut n = 0;
+        for (lineno, line) in io::BufReader::new(std::fs::File::open(path)?).lines().enumerate() {
+            let line = line?;
+            if line.is_empty() {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            let (Some(pinyin), Some(word)) = (fields.next(), fields.next()) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}:{}: 缺 拼音/词 列", path.display(), lineno + 1),
+                ));
+            };
+            let sylls: Vec<&str> = pinyin.split('\'').collect();
+            if self.add_user_word(&sylls, word) {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
+    /// 把用户造词写盘(`pin'yin 词 词频` 行,按造词先后)。无数据时清空该文件。
+    pub fn save_user_dict(&self, path: &Path) -> io::Result<()> {
+        std::fs::write(path, self.lexicon.user_words.to_lines())
+    }
+
     /// 把 user_bigram 写盘(`上文 当前词 次数` 行,上文字典序 + 次数降序)。无数据时清空该文件。
     pub fn save_bigram(&self, path: &Path) -> io::Result<()> {
         let mut prevs: Vec<_> = self.lexicon.user_bigram.iter().collect();
@@ -144,89 +194,4 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn learn_accumulates_and_boosts_in_convert() {
-        let mut e = Engine::from_str("ni 你 500\nhao 好 300\nni'hao 你好 10000\nni'hao 泥蒿 5\n");
-        // 选"泥蒿"3 次 → convert 后它应顶到首位
-        for _ in 0..3 {
-            e.learn("泥蒿");
-        }
-        assert_eq!(e.user_freq().get("泥蒿"), Some(&3));
-        assert_eq!(e.convert("nihao", 9)[0].text, "泥蒿");
-    }
-
-    #[test]
-    fn user_freq_survives_roundtrip() {
-        let mut e = Engine::from_str("ni 你 500\nhao 好 300\n");
-        e.learn("你"); e.learn("你"); e.learn("好");
-        let dir = std::env::temp_dir().join("glyph_test_user_freq");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("freq.txt");
-        e.save_user_freq(&p).unwrap();
-        let loaded = Engine::load_user_freq(&p).unwrap();
-        assert_eq!(loaded.get("你"), Some(&2));
-        assert_eq!(loaded.get("好"), Some(&1));
-        std::fs::remove_file(&p).ok();
-    }
-
-    #[test]
-    fn load_user_freq_empty_file_is_ok() {
-        let dir = std::env::temp_dir().join("glyph_test_user_freq");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("empty.txt");
-        std::fs::write(&p, "").unwrap();
-        assert!(Engine::load_user_freq(&p).unwrap().is_empty());
-        std::fs::remove_file(&p).ok();
-    }
-
-    /// 真实词库集成测试(词库不在时跳过):验证 USER_W 在真实词频尺度下,
-    /// 用户选低频同音词 3 次后它应顶到首位。
-    #[test]
-    fn real_lexicon_user_freq_promotes_picked_word() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/lexicon.txt");
-        if !path.exists() {
-            return; // 无真实词库时跳过
-        }
-        let mut e = Engine::load(&path).unwrap();
-        let input = "shiji";
-        let first = e.convert(input, 9)[0].text.clone();
-        assert_eq!(first, "世纪", "静态最高频应首位");
-        // 用户连续 3 次选"诗集"(最低频同音词)
-        for _ in 0..3 {
-            e.learn("诗集");
-        }
-        let top = &e.convert(input, 9)[0].text;
-        assert_eq!(top, "诗集", "选 3 次应上浮到首位,实得 {top}");
-    }
-
-    #[test]
-    fn bigram_boosts_matching_first_word() {
-        let mut e = Engine::from_str("xue'xi 学习 100\nxue'xi 穴息 5000\nwo'men 我们 9000\n");
-        // 无上文:词频高的"穴息"在前
-        assert_eq!(e.convert_ctx("xuexi", 9, None)[0].text, "穴息");
-        // 记录搭配 我们→学习 5 次后,带上文"我们"时"学习"上浮到首位
-        for _ in 0..5 {
-            e.learn_bigram("我们", "学习");
-        }
-        assert_eq!(e.convert_ctx("xuexi", 9, Some("我们"))[0].text, "学习");
-        // 不同上文(无搭配记录)仍按纯词频
-        assert_eq!(e.convert_ctx("xuexi", 9, Some("他们"))[0].text, "穴息");
-    }
-
-    #[test]
-    fn bigram_survives_roundtrip() {
-        let mut e = Engine::from_str("wo'men 我们 9000\nxue'xi 学习 100\n");
-        e.learn_bigram("我们", "学习");
-        e.learn_bigram("我们", "学习");
-        let dir = std::env::temp_dir().join("glyph_test_bigram");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("bigram.txt");
-        e.save_bigram(&p).unwrap();
-        let loaded = Engine::load_bigram(&p).unwrap();
-        assert_eq!(loaded.get("我们").and_then(|m| m.get("学习")), Some(&2));
-        std::fs::remove_file(&p).ok();
-    }
-}
+mod tests;

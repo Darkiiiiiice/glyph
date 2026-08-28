@@ -91,6 +91,20 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 ### M4 毕业项目
 ❌ 不做(2026-08-28 用户决定)。原计划 niri im-v2/vkb 修复 + 上游 PR,项目至此收尾。
 
+### 用户造词(逐字定字学成词) ✅(2026-08-28)
+- **触发**:Tab 单字模式连续逐字上屏 ≥2 字且整句选完 → 学成新词;断链即作废
+  (整词/标点上屏、BackSpace、Esc/回车/无关键、字母或 Tab 退出单字模式)——纠错/取消不学,防噪声词。
+- **引擎**:池化 trie 不可运行期插入(节点子边是边池连续段,中间插=全池重排),用户词走 overlay
+  (user_dict.rs,嵌套 map 小 trie,千级);convert 时词边与 trie 词边同桶进 DP,去重/排序/
+  user_freq/bigram 全复用。静态 freq=USER_WORD_FREQ(100)只保证"能见到",排序由造词伴随的
+  user_freq +1 接管。真实词库 total 量级下整词 overlay 边天然压过单字拼合路径赢同文本去重
+  (fixture 需高频填充词模拟 total,否则拼合赢、断言不到 words==[整词])。
+- **防膨胀**:词库已有同(音节路径,文本)词只走 user_freq 不进 overlay;同词再造幂等。
+- **持久化**:user_dict.txt(lexicon 三列行格式),随 commit 全量写;daemon/CLI 启动加载。
+- **边界**:overlay 只接全拼 DP,不接简拼/混合拼索引(造词场景第一遍本就是全拼逐字打的)。
+- **测试**:引擎 3(候选出现/幂等/词库查重/roundtrip)+ session 5(造词/Esc/整词断链/退格断链/单字不造)。
+  lib.rs 行数越线把 tests 拆到 src/tests/mod.rs;punct.rs 收编 commit_punct/punct_of(改定位为"标点处理")。
+
 ## 风险
 
 - **niri 生态兼容**：im-v2 为较新协议，niri 实现可能有 bug（候选窗位置、虚拟键盘重置 XKB 布局组等已知 issue）；应对：直接改 niri 提 PR。
@@ -107,7 +121,7 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
   `xprop -root XIM_SERVERS` = @server=fcitx、glyph 独占 im-v2 activate。ibus/dbus 前端保留(X11 Electron 用)
 - [x] ~~M4:niri im-v2/vkb 已知问题修复 + 上游 PR~~(2026-08-28 决定不做,项目收尾)
 
-## 后续候选功能(2026-08-28 整理,项目收尾后备选,均未开工)
+## 后续候选功能(2026-08-28 整理;用户造词已落地,见上)
 
 现状基线:全项目 3520 行 / 25 个 rs 文件,距 10k 行预算余量 ~6500。规模列为粗略行数估计。
 
@@ -115,8 +129,7 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 
 | 功能 | 说明 | 实现要点 | 规模 |
 |---|---|---|---|
-| 用户造词 | 逐字模式连续定字的序列自动学成新词(Rime 核心手感) | 引擎难点:池化 trie 是构建期一次性结构,运行期插词需留 append 通道 | ~250 行 |
-| 删词/降权 | Ctrl+数字 拉黑垃圾候选(rime 合并后 139 万词库有噪声) | user_blacklist.txt,convert 输出前过滤 | ~80 行 |
+| 删词/降权 | Ctrl+数字 拉黑垃圾候选(rime 合并后 139 万词库有噪声;与造词构成一学一删闭环) | user_blacklist.txt,convert 输出前过滤 | ~80 行 |
 | 以词定字 | 打完词按 [ / ] 取首/尾字上屏(我们+]→们) | session 层,与 char 模式互补 | ~50 行 |
 | 整句级学习 | bigram→trigram,上下文窗口加长 | 不改已定案的 BIGRAM_W 调校,纯加一层;收益需实测 | ~100 行 |
 
@@ -143,4 +156,4 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 
 ### 推荐组合(若重启)
 
-用户造词 + 删词降权 一起出(一学一删,词库质量闭环;造词是引擎侧最后一块能力:运行时插入),再捡日期时间当甜点。
+删词降权(与造词构成一学一删闭环) + 日期时间当甜点。

@@ -138,6 +138,7 @@ impl Builder {
             jp_entries,
             paths,
             user_bigram: HashMap::new(),
+            user_words: crate::user_dict::UserDict::default(),
         }
     }
 }

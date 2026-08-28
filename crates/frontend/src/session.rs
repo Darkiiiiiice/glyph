@@ -3,8 +3,10 @@
 
 use glyph_engine::{Candidate, Engine};
 
+mod coin;
 mod punct;
-use punct::{cn_punct, is_punct_key, is_modifier};
+use coin::Coining;
+use punct::{is_punct_key, is_modifier};
 
 /// 一次按键的处理结果。
 #[derive(Debug, Default, PartialEq)]
@@ -41,12 +43,14 @@ pub struct Session {
     char_mode: bool,
     /// 上一次上屏的尾词(bigram 上文);跨组字保留,clear 不清。
     prev_word: Option<String>,
+    /// 逐字造词链(见 coin.rs):char_mode 连续单字上屏,选完结算成用户词。
+    coin: Coining,
 }
 
 impl Session {
     pub fn new(punct_cn: bool, page_size: usize) -> Self {
         let page_size = page_size.clamp(1, 20);
-        Self { buffer: String::new(), candidates: Vec::new(), page: 0, page_size, pool: page_size * 10, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false, prev_word: None }
+        Self { buffer: String::new(), candidates: Vec::new(), page: 0, page_size, pool: page_size * 10, punct_cn, dquote_open: false, squote_open: false, english: false, shift_down: false, shift_used: false, char_mode: false, prev_word: None, coin: Coining::default() }
     }
     /// 切换中/英文标点模式,返回新模式(true=中文)。
     pub fn toggle_punct(&mut self) -> bool {
@@ -76,6 +80,7 @@ impl Session {
         match sym {
             s if (K::KEY_a..=K::KEY_z).contains(&s) => {
                 self.char_mode = false; // 单字模式下按字母:退出单字、字母正常入缓冲
+                self.coin.clear(); // 退出单字:断造词链
                 self.buffer.push(char::from_u32(s).unwrap());
                 self.refresh(engine);
                 Reply { consumed: true, preedit_dirty: true, ..Default::default() }
@@ -105,10 +110,14 @@ impl Session {
             // Tab 切单字模式:候选窗在整句与首音节单字间切换(逐字定字)。
             K::KEY_Tab if self.composing() => {
                 self.char_mode = !self.char_mode;
+                if !self.char_mode {
+                    self.coin.clear(); // 退出单字:断造词链
+                }
                 self.refresh(engine);
                 Reply { consumed: true, preedit_dirty: true, ..Default::default() }
             }
             K::KEY_BackSpace if self.composing() => {
+                self.coin.clear(); // 编辑拼音:纠错场景,断造词链
                 self.buffer.pop();
                 self.refresh(engine);
                 Reply { consumed: true, preedit_dirty: true, ..Default::default() }
@@ -201,6 +210,7 @@ impl Session {
         self.candidates.clear();
         self.page = 0;
         self.char_mode = false;
+        self.coin.clear();
     }
 
     /// 选中候选:上屏 text;若候选只消耗前缀拼音(首词/逐字选择),截掉已消耗
@@ -218,7 +228,16 @@ impl Session {
         }
         // 单字模式部分上屏(有剩余拼音)时保持单字模式,连续逐字选下一字;选完走 clear 退出。
         let total = self.buffer.bytes().filter(|&b| b != b'\'').count();
+        // 逐字造词链:char_mode 的单字 pick 累积(音节=本次消耗的拼音),其余 pick 断链。
+        let is_char_pick = self.char_mode && text.chars().count() == 1;
+        if is_char_pick {
+            let syll: String = self.buffer.chars().filter(|&c| c != '\'').take(consumed).collect();
+            self.coin.push(syll, text.clone());
+        } else {
+            self.coin.clear();
+        }
         if consumed >= total {
+            self.coin.finish(engine); // 结算在 clear 之前(clear 会清链)
             self.clear();
         } else {
             // 部分上屏:截掉已消耗拼音(跳过穿插的 '),剩余重新转换继续组字。
@@ -243,38 +262,6 @@ impl Session {
     pub fn page_candidates(&self) -> &[Candidate] {
         let start = (self.page * self.page_size).min(self.candidates.len());
         &self.candidates[start..(start + self.page_size).min(self.candidates.len())]
-    }
-    /// 上屏标点:组字中 = 当前页首选+标点(无候选则拼音原文+标点);空闲 = 直接标点。
-    /// 首选为首词(部分消耗)时上屏首词+标点、剩余拼音继续组字。
-    fn commit_punct(&mut self, engine: &mut Engine, p: &str) -> Reply {
-        if self.composing() {
-            let (text, consumed) = self
-                .candidates
-                .get(self.page * self.page_size)
-                .map(|c| (c.text.clone(), c.consumed))
-                .unwrap_or_else(|| (self.buffer.clone(), usize::MAX));
-            self.pick(engine, text + p, consumed)
-        } else {
-            Reply { consumed: true, commit: Some(p.to_string()), ..Default::default() }
-        }
-    }
-
-    /// 标点符号(引号做开闭配对)。仅 punct_cn 模式调用;调用即翻转引号状态。
-    fn punct_of(&mut self, sym: u32) -> Option<&'static str> {
-        use xkbcommon::xkb::keysyms as K;
-        Some(match sym {
-            K::KEY_quotedbl => {
-                let p = if self.dquote_open { "\u{201D}" } else { "\u{201C}" };
-                self.dquote_open = !self.dquote_open;
-                p
-            }
-            K::KEY_apostrophe => {
-                let p = if self.squote_open { "\u{2019}" } else { "\u{2018}" };
-                self.squote_open = !self.squote_open;
-                p
-            }
-            _ => cn_punct(sym)?,
-        })
     }
 }
 

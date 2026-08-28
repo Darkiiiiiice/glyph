@@ -2,6 +2,7 @@ use super::*;
 use xkbcommon::xkb::keysyms as K;
 
 mod bigram;
+mod coin;
 
 fn fixture() -> Engine {
     Engine::from_str("ni'hao 你好 10000\nni 你 500\nhao 好 300\n")
