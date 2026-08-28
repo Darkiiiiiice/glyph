@@ -105,6 +105,17 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 - **测试**:引擎 3(候选出现/幂等/词库查重/roundtrip)+ session 5(造词/Esc/整词断链/退格断链/单字不造)。
   lib.rs 行数越线把 tests 拆到 src/tests/mod.rs;punct.rs 收编 commit_punct/punct_of(改定位为"标点处理")。
 
+### 以词定字(`[`/`]` 取词首/尾字) ✅(2026-08-28)
+- **行为**:整句模式组字中 `[` 上屏当前页首选首字、`]` 尾字;守卫排除 char_mode(单字模式候选
+  本就是单字)与无候选/空闲——落空走既有默认分支(有拼音上屏原文、空闲转发字面键,应用快捷键不受影响)。
+- **实现**:纯 session 层,pick_word_char 复用 pick();造词链经 pick 的非逐字分支自动断开(定字不算逐字)。
+  上屏单字找不到 (text,consumed) 匹配的整词候选,pick 后手动把该字记为 prev_word(bigram 上文)。
+- **事实**:整句 convert 候选全部全长消耗(consumed=输入长),部分消耗只存在于 char 模式
+  (first_syllable_chars)——故定字即选完,无"剩余拼音续打"分支。commit_punct 注释里"首词部分消耗"
+  是早期设计的残留说法。
+- **测试**:word_char.rs 4 个(首/尾字+prev_word、无候选落空、空闲转发、char 模式落空);
+  顺手把 tests/mod.rs(301 行越线)按主题拆出 char_mode.rs / paging.rs。
+
 ## 风险
 
 - **niri 生态兼容**：im-v2 为较新协议，niri 实现可能有 bug（候选窗位置、虚拟键盘重置 XKB 布局组等已知 issue）；应对：直接改 niri 提 PR。
@@ -121,7 +132,7 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
   `xprop -root XIM_SERVERS` = @server=fcitx、glyph 独占 im-v2 activate。ibus/dbus 前端保留(X11 Electron 用)
 - [x] ~~M4:niri im-v2/vkb 已知问题修复 + 上游 PR~~(2026-08-28 决定不做,项目收尾)
 
-## 后续候选功能(2026-08-28 整理;用户造词已落地,见上)
+## 后续候选功能(2026-08-28 整理;用户造词、以词定字已落地,见上)
 
 现状基线:全项目 3520 行 / 25 个 rs 文件,距 10k 行预算余量 ~6500。规模列为粗略行数估计。
 
@@ -130,7 +141,6 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 | 功能 | 说明 | 实现要点 | 规模 |
 |---|---|---|---|
 | 删词/降权 | Ctrl+数字 拉黑垃圾候选(rime 合并后 139 万词库有噪声;与造词构成一学一删闭环) | user_blacklist.txt,convert 输出前过滤 | ~80 行 |
-| 以词定字 | 打完词按 [ / ] 取首/尾字上屏(我们+]→们) | session 层,与 char 模式互补 | ~50 行 |
 | 整句级学习 | bigram→trigram,上下文窗口加长 | 不改已定案的 BIGRAM_W 调校,纯加一层;收益需实测 | ~100 行 |
 
 ### 二档:手感补全(主流输入法标配)

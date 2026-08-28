@@ -140,6 +140,15 @@ impl Session {
                 }
                 Reply { consumed: true, preedit_dirty: moved, ..Default::default() }
             }
+            // 以词定字:`[` 上屏当前页首选首字、`]` 尾字(词认得、只要其一字,免进单字模式)。
+            // 守卫排除 char_mode(单字模式候选本就是单字)与无候选/空闲(落空走默认分支:
+            // 有拼音上屏原文、空闲把字面括号键转发给应用)。
+            K::KEY_bracketleft if self.composing() && !self.char_mode && !self.candidates.is_empty() => {
+                self.pick_word_char(engine, false)
+            }
+            K::KEY_bracketright if self.composing() && !self.char_mode && !self.candidates.is_empty() => {
+                self.pick_word_char(engine, true)
+            }
             K::KEY_Return if self.composing() => {
                 let text = self.buffer.clone();
                 self.clear();
@@ -257,6 +266,23 @@ impl Session {
             self.refresh(engine);
         }
         Reply { consumed: true, commit: Some(text), preedit_dirty: true, ..Default::default() }
+    }
+    /// 以词定字:上屏当前页首选的首字(last=false)或尾字(last=true)。
+    /// 整句候选必全长消耗,故定字即选完;造词链经 pick 的非逐字分支自动断开。
+    fn pick_word_char(&mut self, engine: &mut Engine, last: bool) -> Reply {
+        let Some(c) = self.candidates.get(self.page * self.page_size) else {
+            return Reply::default();
+        };
+        let Some(ch) = (if last { c.text.chars().next_back() } else { c.text.chars().next() }) else {
+            return Reply::default();
+        };
+        let text = ch.to_string();
+        let consumed = c.consumed;
+        let r = self.pick(engine, text.clone(), consumed);
+        // pick 按 (text,consumed) 找整词候选更新 bigram 尾词;定字上屏的单字找不到匹配,
+        // 手动把上屏字记为 prev_word,供下一句的 bigram 上文。
+        self.prev_word = Some(text);
+        r
     }
     /// 当前页候选(候选窗渲染的数据源)。
     pub fn page_candidates(&self) -> &[Candidate] {
