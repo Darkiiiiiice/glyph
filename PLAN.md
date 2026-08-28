@@ -89,7 +89,7 @@ glyph-build 增加 rime_merge 步骤(bin 目录化布局):rime dict.yaml 追加�
 **根因教训(为什么必须动构建而非换分配器)**:旧版压实后 RSS 仍 ~640MB 而实测活数据仅 ~300MB——两百万个 40B 小堆块与构建垃圾交错造成**页稀疏**(每 4K 页都有活块,任何分配器都无法 unmap;glibc/mimalloc 实测同高,malloc_trim 只收堆顶无效)。诊断手法:python 统计节点/词条数估活数据 + /proc/pid/smaps 按区间聚合看 RSS 构成。解法:让构建期也只产生少数大分配,垃圾释放后堆顶连续,trim 自然生效。
 
 ### M4 毕业项目
-niri 侧协议修复 + 上游 PR。输入法 + 合成器两端全掌握，是本项目独有的学习场景。
+❌ 不做(2026-08-28 用户决定)。原计划 niri im-v2/vkb 修复 + 上游 PR,项目至此收尾。
 
 ## 风险
 
@@ -105,4 +105,4 @@ niri 侧协议修复 + 上游 PR。输入法 + 合成器两端全掌握，是本
   `DisabledAddons=waylandim` 和 `[Addons/waylandim] Enabled=False` 均无效);niri 环境只设
   `XMODIFIERS=@im=fcitx`,不设全局 GTK_IM_MODULE/QT_IM_MODULE。验证:fcitx5 日志无 waylandim、
   `xprop -root XIM_SERVERS` = @server=fcitx、glyph 独占 im-v2 activate。ibus/dbus 前端保留(X11 Electron 用)
-- [ ] M4:niri im-v2/vkb 已知问题修复 + 上游 PR
+- [x] ~~M4:niri im-v2/vkb 已知问题修复 + 上游 PR~~(2026-08-28 决定不做,项目收尾)
