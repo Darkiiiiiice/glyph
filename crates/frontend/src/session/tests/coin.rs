@@ -48,13 +48,13 @@ fn escape_aborts_coining() {
 
 #[test]
 fn word_pick_breaks_chain() {
-    let mut e = Engine::from_str("chi 魑 500\nmei 魅 500\nchi'mei 痴迷 800\n");
+    let mut e = coin_fixture();
     let mut s = Session::new(true, 9);
     type_input(&mut s, &mut e, "chimei");
     s.on_keysym(&mut e, K::KEY_Tab);
     s.on_keysym(&mut e, K::KEY_1); // 逐字选"魑"
     s.on_keysym(&mut e, K::KEY_Tab); // 退回整句模式 → 断链
-    // 剩余拼音只有 "mei",整词选"魅"(链已在 Tab 时断)
+    // 剩余拼音只剩 "mei",整词选"魅"(char_mode 已关,非逐字 pick,再断一次链)
     let r = s.on_keysym(&mut e, K::KEY_1);
     assert_eq!(r.commit.as_deref(), Some("魅"));
     assert!(!e.convert("chimei", 9).iter().any(|c| c.words == ["魑魅"]), "混合选法不造词");
@@ -68,8 +68,7 @@ fn backspace_breaks_chain() {
     s.on_keysym(&mut e, K::KEY_Tab);
     s.on_keysym(&mut e, K::KEY_1); // 逐字选"魑"
     s.on_keysym(&mut e, K::KEY_BackSpace); // 退格纠错 → 断链
-    type_input(&mut s, &mut e, "i"); // 补回 "mei"
-    // 单字模式已随退格后的输入保持?BackSpace 不改 char_mode,仍是单字模式
+    type_input(&mut s, &mut e, "i"); // 补回 "mei"(BackSpace 不改 char_mode,仍是单字模式)
     s.on_keysym(&mut e, K::KEY_1); // 选"魅"——链已断,只剩 1 字,不结算
     assert!(!coined(&e));
 }
